@@ -9,7 +9,7 @@ final class SpeechModelsTests: XCTestCase {
 
     /// Скачивает модель тем же путём, что и кнопка в настройках.
     @MainActor
-    private func install(_ kind: ModelKind) async throws {
+    private static func install(_ kind: ModelKind) async throws {
         let manager = ModelManager()
         if manager.isInstalled(kind) { return }
         manager.install(kind)
@@ -31,7 +31,7 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     func testSileroFindsSpeechAndThePause() async throws {
-        try await install(.silero)
+        try await Self.install(.silero)
         let samples = try await loadSpeech()
         let duration = Double(samples.count) / 16000
         let detection = try await SpeechDetector.detect(samples: samples, useSilero: true) { _ in }
@@ -46,7 +46,7 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     func testWhisperGivesWordTimestamps() async throws {
-        try await install(.whisper(.base))
+        try await Self.install(.whisper(.base))
         let samples = try await loadSpeech()
         let duration = Double(samples.count) / 16000
         let words = try await WhisperTranscriber.transcribe(samples: samples, model: .base) { _ in }
