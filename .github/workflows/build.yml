@@ -39,6 +39,16 @@ jobs:
       - name: Install XcodeGen
         run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
 
+      - name: Synthesize Russian speech fixture
+        run: |
+          mkdir -p Tests/CleanCutTests/Fixtures
+          VOICE=$(say -v '?' | awk '/ru_RU/ {print $1; exit}')
+          echo "voice: $VOICE"
+          test -n "$VOICE"
+          say -v "$VOICE" -o /tmp/speech.aiff "Привет. Сегодня мы поговорим о монтаже. [[slnc 1500]] Привет. Сегодня мы поговорим о монтаже видео на айфоне."
+          afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/speech.aiff Tests/CleanCutTests/Fixtures/speech.wav
+          afinfo Tests/CleanCutTests/Fixtures/speech.wav | grep -E "duration|format"
+
       - name: Generate project
         run: xcodegen generate
 
@@ -64,7 +74,7 @@ jobs:
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            | tee build/xcodebuild-test.log | grep -E "error:|error |Test Case|Test Suite|XCTAssert|Executed|TEST (SUCCEEDED|FAILED)|^\*\*" || true
+            | tee build/xcodebuild-test.log | grep -E "error:|error |Test Case|Test Suite|XCTAssert|Executed|WHISPER TEXT|PHRASES|HEURISTIC|TEST (SUCCEEDED|FAILED)|^\*\*" || true
           grep -q "TEST SUCCEEDED" build/xcodebuild-test.log
 
       - name: Upload test log

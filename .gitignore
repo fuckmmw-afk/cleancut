@@ -8,3 +8,4 @@ DerivedData/
 Package.resolved
 *.ipa
 .DS_Store
+Tests/CleanCutTests/Fixtures/
