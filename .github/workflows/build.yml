@@ -1,0 +1,96 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests (CutCore)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        working-directory: Packages/CutCore
+        run: swift test
+
+  build:
+    name: Unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          swift --version
+
+      - name: Metal toolchain (нужен для MLX)
+        run: xcodebuild -showComponent MetalToolchain || xcodebuild -downloadComponent MetalToolchain || true
+
+      - name: Install XcodeGen
+        run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ hashFiles('project.yml') }}
+
+      - name: Build (unsigned)
+        run: |
+          mkdir -p build
+          xcodebuild build \
+            -project CleanCut.xcodeproj \
+            -scheme CleanCut \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee build/xcodebuild.log | grep -E "error:|error |BUILD (SUCCEEDED|FAILED)|^\*\*" || true
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          APP=build/DerivedData/Build/Products/Release-iphoneos/CleanCut.app
+          test -d "$APP"
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -qry ../CleanCut-unsigned.ipa Payload)
+          ls -lh build/CleanCut-unsigned.ipa
+          du -sh "$APP"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: CleanCut-unsigned-ipa
+          path: build/CleanCut-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore

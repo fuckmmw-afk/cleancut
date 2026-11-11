@@ -1,0 +1,94 @@
+name: CleanCut
+options:
+  bundleIdPrefix: app.cleancut
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: ru
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+packages:
+  CutCore:
+    path: Packages/CutCore
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    exactVersion: 1.1.1
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    exactVersion: 3.32.3
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: 0.18.3
+  SwiftHuggingFace:
+    url: https://github.com/huggingface/swift-huggingface
+    from: 1.0.0
+  SwiftTransformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: 1.4.0
+targets:
+  CleanCut:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: CutCore
+      - package: WhisperKit
+        product: WhisperKit
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
+      - package: FluidAudio
+        product: FluidAudio
+      - package: SwiftHuggingFace
+        product: HuggingFace
+      - package: SwiftTransformers
+        product: Tokenizers
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.cleancut.CleanCut
+        PRODUCT_NAME: CleanCut
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: "NO"
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: CleanCut
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiredDeviceCapabilities:
+          - arm64
+        ITSAppUsesNonExemptEncryption: false
+        NSPhotoLibraryAddUsageDescription: Чтобы сохранить готовый ролик в Фото.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).processing
+    entitlements:
+      path: App/CleanCut.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
+schemes:
+  CleanCut:
+    build:
+      targets:
+        CleanCut: all
+    run:
+      config: Debug
+    archive:
+      config: Release

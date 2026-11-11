@@ -1,0 +1,10 @@
+*.xcodeproj
+App/Info.plist
+App/CleanCut.entitlements
+.build/
+build/
+DerivedData/
+.swiftpm/
+Package.resolved
+*.ipa
+.DS_Store
