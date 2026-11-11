@@ -1,4 +1,5 @@
 import CutCore
+import FluidAudio
 import Foundation
 
 /// Модель, которую можно скачать в настройках.
@@ -83,9 +84,13 @@ enum ModelLocator {
 
     // MARK: Silero
 
+    /// FluidAudio кладёт модель в Models/<имя репозитория без «-coreml»>.
+    static var sileroFolder: URL {
+        ModelStore.fluidAudio.appendingPathComponent("Models/silero-vad", isDirectory: true)
+    }
+
     static var sileroFile: URL {
-        ModelStore.fluidAudio.appendingPathComponent("Models/silero-vad-coreml", isDirectory: true)
-            .appendingPathComponent("silero-vad-unified-256ms-v6.2.1.mlmodelc")
+        sileroFolder.appendingPathComponent(ModelNames.VAD.sileroVadFile)
     }
 
     static var isSileroInstalled: Bool {
@@ -131,7 +136,7 @@ enum ModelLocator {
         let url: URL
         switch kind {
         case .silero:
-            url = sileroFile
+            url = sileroFolder
         case .whisper(let model):
             guard let folder = recorded(.whisper(model)) else { return nil }
             url = folder
