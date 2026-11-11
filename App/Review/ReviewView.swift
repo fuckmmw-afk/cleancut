@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ReviewView: View {
     let projectID: UUID
+    var onReanalyze: () -> Void = {}
 
     @Environment(ProjectStore.self) private var store
     @Environment(AppSettings.self) private var settings
@@ -11,6 +12,7 @@ struct ReviewView: View {
     @State private var model: ReviewModel?
     @State private var exportModel = ExportModel()
     @State private var showExport = false
+    @State private var confirmReanalyze = false
 
     var body: some View {
         Group {
@@ -39,6 +41,16 @@ struct ReviewView: View {
                         } label: {
                             Label("Пересчитать паузы по настройкам", systemImage: "arrow.triangle.2.circlepath")
                         }
+                        Button {
+                            confirmReanalyze = true
+                        } label: {
+                            Label("Найти дубли заново", systemImage: "sparkles")
+                        }
+                        if let logURL = model.logURL {
+                            ShareLink(item: logURL) {
+                                Label("Журнал анализа", systemImage: "doc.text")
+                            }
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -52,6 +64,14 @@ struct ReviewView: View {
                     .disabled(!model.isReady)
                 }
             }
+        }
+        .confirmationDialog("Найти дубли заново?", isPresented: $confirmReanalyze, titleVisibility: .visible) {
+            Button("Найти заново") {
+                model?.prepareReanalysis()
+                onReanalyze()
+            }
+        } message: {
+            Text("Распознавать речь заново не придётся. Паузы и дубли посчитаются с текущими настройками, ручные правки сбросятся.")
         }
         .sheet(isPresented: $showExport) {
             if let model {
@@ -239,7 +259,17 @@ private struct PhraseRow: View {
                             .padding(.vertical, 1)
                             .background(kind.color.opacity(0.25), in: Capsule())
                             .foregroundStyle(kind.color)
+                    } else if let suggestion = model.suggestion(for: phrase) {
+                        Text("возможно \(suggestion.kind.label)")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .overlay(Capsule().stroke(suggestion.kind.color.opacity(0.6), lineWidth: 1))
+                            .foregroundStyle(suggestion.kind.color.opacity(0.8))
                     }
+                }
+                if let note = (model.activeCut(for: phrase) ?? model.suggestion(for: phrase))?.note {
+                    Text(note).font(.caption2).foregroundStyle(.secondary)
                 }
                 if model.tapMode == .select {
                     words

@@ -38,8 +38,10 @@ public enum RetakeJSON {
                 throw ParseError.invalidItem
             }
             guard allowedIDs.contains(id) else { throw ParseError.unknownID(id) }
+            // 0 или отсутствие поля значит «замены нет».
+            let kept = intValue(dict["kept"]).flatMap { $0 > 0 ? $0 : nil }
             if seen.insert(id).inserted {
-                removals.append(Removal(id: id, reason: reason))
+                removals.append(Removal(id: id, reason: reason, kept: kept))
             }
         }
 

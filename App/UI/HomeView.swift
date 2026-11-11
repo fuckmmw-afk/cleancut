@@ -36,7 +36,7 @@ struct HomeView: View {
                     case .processing(let id):
                         ProcessingView(projectID: id) { path = [.review(id)] }
                     case .review(let id):
-                        ReviewView(projectID: id)
+                        ReviewView(projectID: id) { path = [.processing(id)] }
                     }
                 }
         }

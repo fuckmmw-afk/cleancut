@@ -71,10 +71,12 @@ public struct Cut: Codable, Hashable, Sendable, Identifiable {
     public var enabled: Bool
     /// Фраза, из-за которой появился рез (для дублей и фальстартов).
     public var phraseID: Int?
+    /// Пояснение для экрана ревью: какая фраза заменяет эту или почему предложение модели не принято.
+    public var note: String?
 
     public init(
         id: UUID = UUID(), start: Double, end: Double, kind: CutKind, enabled: Bool = true,
-        phraseID: Int? = nil
+        phraseID: Int? = nil, note: String? = nil
     ) {
         self.id = id
         self.start = start
@@ -82,6 +84,7 @@ public struct Cut: Codable, Hashable, Sendable, Identifiable {
         self.kind = kind
         self.enabled = enabled
         self.phraseID = phraseID
+        self.note = note
     }
 
     public var range: TimeRange { TimeRange(start: start, end: end) }
@@ -105,9 +108,12 @@ public struct Removal: Codable, Hashable, Sendable {
 
     public var id: Int
     public var reason: Reason
+    /// Более поздняя фраза, которая заменяет эту (для дублей и фальстартов).
+    public var kept: Int?
 
-    public init(id: Int, reason: Reason) {
+    public init(id: Int, reason: Reason, kept: Int? = nil) {
         self.id = id
         self.reason = reason
+        self.kept = kept
     }
 }

@@ -134,6 +134,32 @@ final class ReviewModel {
         return kinds.compactMap { $0 }.first { $0 != .pause } ?? .pause
     }
 
+    /// Включённый рез-причина для фразы (дубль, фальстарт, мусор).
+    func activeCut(for phrase: Phrase) -> Cut? {
+        project.cuts.first { $0.enabled && $0.phraseID == phrase.id && $0.kind != .pause }
+    }
+
+    /// Выключенное предложение модели: показываем «возможно дубль», но не вырезаем.
+    func suggestion(for phrase: Phrase) -> Cut? {
+        guard activeCut(for: phrase) == nil else { return nil }
+        return project.cuts.first {
+            !$0.enabled && $0.phraseID == phrase.id && $0.kind != .pause && $0.kind != .manual
+        }
+    }
+
+    /// Готовит проект к повторному поиску дублей: транскрипт остаётся, резы считаются заново.
+    func prepareReanalysis() {
+        pause()
+        project.stage = .transcribed
+        project.cuts = []
+        store.save(project)
+    }
+
+    var logURL: URL? {
+        let url = AnalysisLog.url(for: project.id)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     func isCurrent(_ phrase: Phrase) -> Bool {
         currentSourceTime >= phrase.start && currentSourceTime < phrase.end
     }

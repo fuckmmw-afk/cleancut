@@ -35,6 +35,7 @@ final class AnalysisModel {
     private(set) var skippedSteps: Set<Step> = []
 
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var log: AnalysisLog?
 
     var isRunning: Bool { state == .running }
 
@@ -52,12 +53,15 @@ final class AnalysisModel {
                 success = true
             } catch is CancellationError {
                 state = .cancelled
+                log?.write("Отменено")
             } catch {
                 if Task.isCancelled {
                     state = .cancelled
+                    log?.write("Отменено")
                 } else {
                     let appError = AppError.wrap(error, title: "Анализ не удался")
                     state = .failed(appError.title, appError.message)
+                    log?.write("Ошибка: \(String(describing: error))")
                 }
             }
             BackgroundKeeper.shared.end(success: success)
@@ -92,12 +96,16 @@ final class AnalysisModel {
     private func run(_ original: Project, store: ProjectStore, settings: PipelineSettings) async throws {
         var project = original
         let sourceURL = ProjectStore.sourceURL(for: project)
+        let log = AnalysisLog(projectID: project.id)
+        self.log = log
+        log.header(settings: settings, project: project)
+        log.memory("Старт")
 
         // Под временный звук, модели и служебные файлы.
         try Disk.ensure(300 << 20)
 
         if project.stage == .imported || project.words.isEmpty {
-            let transcript = try await transcribe(sourceURL: sourceURL, settings: settings)
+            let transcript = try await transcribe(sourceURL: sourceURL, settings: settings, log: log)
             project.words = transcript.words
             project.phrases = PhraseSegmenter.phrases(from: transcript.words)
             project.speech = transcript.speech
@@ -120,16 +128,31 @@ final class AnalysisModel {
 
         // Дубли.
         enter(.llm, detail: "", fraction: nil)
-        let retakes = try await findRetakes(phrases: project.phrases, model: settings.retakeModel)
+        let retakes = try await findRetakes(phrases: project.phrases, model: settings.retakeModel, log: log)
         project.notes.removeAll { $0.hasPrefix(Self.retakeNotePrefix) }
         project.notes.append(contentsOf: retakes.notes.map { Self.retakeNotePrefix + $0 })
         cuts += CutPlanner.retakeCuts(
             removals: retakes.removals, phrases: project.phrases, words: project.words,
             duration: project.duration, options: options)
+        // Неподтверждённые предложения модели сохраняем выключенными: на ревью их можно включить одним тапом.
+        let rejectedCuts = CutPlanner.retakeCuts(
+            removals: retakes.rejected.map(\.removal), phrases: project.phrases, words: project.words,
+            duration: project.duration, options: options)
+        let reasons = Dictionary(
+            retakes.rejected.map { ($0.removal.id, $0.why) }, uniquingKeysWith: { first, _ in first })
+        cuts += rejectedCuts.map { cut in
+            var cut = cut
+            cut.enabled = false
+            cut.note = cut.phraseID.flatMap { reasons[$0] }.map { "не вырезано: \($0)" }
+            return cut
+        }
 
         project.cuts = cuts.sorted { $0.start < $1.start }
         project.stage = .analyzed
         store.save(project)
+        log.write(
+            "Готово: пауз \(cuts.filter { $0.kind == .pause }.count), вырезано фраз \(retakes.removals.count), отклонено \(retakes.rejected.count), итог \(Format.duration(project.outputDuration)) из \(Format.duration(project.duration))"
+        )
     }
 
     /// Невидимый префикс, по которому замечания детектора дублей отличаются от остальных.
@@ -141,7 +164,7 @@ final class AnalysisModel {
         var notes: [String]
     }
 
-    private func transcribe(sourceURL: URL, settings: PipelineSettings) async throws -> Transcript {
+    private func transcribe(sourceURL: URL, settings: PipelineSettings, log: AnalysisLog) async throws -> Transcript {
         // 1. Звук.
         enter(.audio)
         let audioURL = AudioExtractor.temporaryURL()
@@ -165,6 +188,7 @@ final class AnalysisModel {
         }
         var notes: [String] = []
         if let note = detection.note { notes.append(note) }
+        log.write("Речь: \(detection.speech.count) интервалов, Silero: \(detection.usedSilero)")
         try Task.checkCancellation()
 
         // 3. Транскрипция.
@@ -187,10 +211,12 @@ final class AnalysisModel {
         guard !words.isEmpty else {
             throw AppError("Речь не найдена", "В этом видео не получилось распознать ни одного слова.")
         }
+        log.write("Whisper: \(words.count) слов")
+        log.memory("После Whisper")
         return Transcript(words: words, speech: detection.speech, notes: notes)
     }
 
-    private func findRetakes(phrases: [Phrase], model: RetakeModel) async throws -> RetakeOutcome {
+    private func findRetakes(phrases: [Phrase], model: RetakeModel, log: AnalysisLog) async throws -> RetakeOutcome {
         guard model != .off else {
             skippedSteps.insert(.llm)
             return RetakeOutcome(removals: [])
@@ -204,6 +230,7 @@ final class AnalysisModel {
             candidates = [.qwen4B, .qwen1_7B, .heuristic]
             // Большой модели нужно около 3 ГБ. Если система столько не даст, сразу берём запасную.
             if MemoryBudget.available < 3_000 << 20 {
+                log.memory("Мало памяти для 4B")
                 candidates.removeFirst()
                 notes.append("Для Qwen3-4B не хватило памяти, дубли искала запасная модель Qwen3-1.7B.")
             }
@@ -216,7 +243,8 @@ final class AnalysisModel {
             guard let detector = RetakeDetectorFactory.make(candidate) else { continue }
             let title = candidate.title
             do {
-                var outcome = try await detector.detect(phrases: phrases) { [weak self] phase in
+                log.write("Поиск дублей: \(candidate.title)")
+                var outcome = try await detector.detect(phrases: phrases, log: log) { [weak self] phase in
                     Task { @MainActor in
                         switch phase {
                         case .downloading(let value):
@@ -238,6 +266,7 @@ final class AnalysisModel {
                 throw CancellationError()
             } catch {
                 if Task.isCancelled { throw CancellationError() }
+                log.write("\(candidate.title) не сработала: \(String(describing: error))")
                 lastError = error
             }
         }

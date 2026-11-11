@@ -18,6 +18,12 @@ struct CleanCutApp: App {
                 .environment(thermal)
                 .preferredColorScheme(.dark)
                 .tint(Color.accentColor)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                    ForegroundFlag.shared.set(false)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                    ForegroundFlag.shared.set(true)
+                }
         }
     }
 }

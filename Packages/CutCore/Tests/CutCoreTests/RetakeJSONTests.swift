@@ -111,7 +111,14 @@ final class RetakeJSONTests: XCTestCase {
         }
     }
 
-    // MARK: Чанки
+    func testKeptField() throws {
+        let text = #"{"remove":[{"id":2,"kept":5,"reason":"retake"},{"id":3,"kept":0,"reason":"garbage"}]}"#
+        XCTAssertEqual(
+            try RetakeJSON.parse(text, allowedIDs: ids),
+            [Removal(id: 2, reason: .retake, kept: 5), Removal(id: 3, reason: .garbage)])
+    }
+
+    // MARK: Окна
 
     func makePhrases(_ count: Int) -> [Phrase] {
         (1...count).map {
@@ -119,48 +126,52 @@ final class RetakeJSONTests: XCTestCase {
         }
     }
 
-    func testChunksCoverEverythingWithOverlap() {
-        let phrases = makePhrases(100)
-        let chunks = RetakePrompt.chunks(phrases, size: 40, overlap: 8)
-        XCTAssertEqual(chunks.map { $0.phrases.first!.id }, [1, 33, 65])
-        XCTAssertEqual(chunks.map { $0.phrases.last!.id }, [40, 72, 100])
-        XCTAssertTrue(chunks[0].overlapIDs.isEmpty)
-        XCTAssertEqual(chunks[1].overlapIDs, Set(33...40))
-        XCTAssertEqual(Set(chunks.flatMap { $0.phrases.map(\.id) }), Set(1...100))
+    func testShortTranscriptIsOneWindow() {
+        let windows = RetakePrompt.windows(makePhrases(80))
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows[0].targetIDs, Set(1...80))
+        XCTAssertTrue(RetakePrompt.windows([]).isEmpty)
     }
 
-    func testSingleChunk() {
-        let chunks = RetakePrompt.chunks(makePhrases(5), size: 40, overlap: 8)
-        XCTAssertEqual(chunks.count, 1)
-        XCTAssertTrue(RetakePrompt.chunks([], size: 40, overlap: 8).isEmpty)
+    func testWindowsHaveContextAndDisjointTargets() {
+        let windows = RetakePrompt.windows(makePhrases(130), target: 50, before: 30, after: 15, wholeLimit: 90)
+        XCTAssertEqual(windows.count, 3)
+        XCTAssertEqual(windows.map { $0.targets.first!.id }, [1, 51, 101])
+        XCTAssertEqual(windows.map { $0.targets.last!.id }, [50, 100, 130])
+        XCTAssertEqual(windows.map { $0.phrases.first!.id }, [1, 21, 71])
+        XCTAssertEqual(windows.map { $0.phrases.last!.id }, [65, 115, 130])
+        var all = Set<Int>()
+        for window in windows {
+            XCTAssertTrue(all.isDisjoint(with: window.targetIDs))
+            all.formUnion(window.targetIDs)
+        }
+        XCTAssertEqual(all, Set(1...130))
     }
 
-    func testMergeDeduplicatesAndGuardsOverlap() {
-        let chunks = RetakePrompt.chunks(makePhrases(60), size: 40, overlap: 8)
+    func testMergeKeepsOnlyTargets() {
+        let windows = RetakePrompt.windows(makePhrases(130), target: 50, before: 30, after: 15, wholeLimit: 90)
         let merged = RetakePrompt.mergeResults([
-            (chunks[0], [Removal(id: 5, reason: .retake), Removal(id: 35, reason: .garbage)]),
-            (
-                chunks[1],
-                [
-                    Removal(id: 34, reason: .falseStart),  // перекрытие, первый чанк не согласен
-                    Removal(id: 35, reason: .garbage),  // перекрытие, первый согласен
-                    Removal(id: 36, reason: .retake),  // перекрытие, дубль принимаем
-                    Removal(id: 50, reason: .falseStart),
-                ]
-            ),
+            (windows[0], [Removal(id: 5, reason: .retake, kept: 7), Removal(id: 60, reason: .garbage)]),
+            (windows[1], [Removal(id: 40, reason: .retake, kept: 41), Removal(id: 60, reason: .garbage)]),
         ])
-        XCTAssertEqual(
-            merged,
-            [
-                Removal(id: 5, reason: .retake), Removal(id: 35, reason: .garbage),
-                Removal(id: 36, reason: .retake), Removal(id: 50, reason: .falseStart),
-            ])
+        XCTAssertEqual(merged, [Removal(id: 5, reason: .retake, kept: 7), Removal(id: 60, reason: .garbage)])
     }
 
-    func testPromptListsPhrases() {
-        let chunk = RetakePrompt.chunks(makePhrases(2), size: 40, overlap: 8)[0]
-        let prompt = RetakePrompt.user(for: chunk)
-        XCTAssertTrue(prompt.contains("1 [00:01.0–00:01.5] фраза 1"))
+    func testPromptAndSchema() throws {
+        let window = RetakePrompt.windows(makePhrases(130), target: 50, before: 30, after: 15, wholeLimit: 90)[1]
+        let prompt = RetakePrompt.user(for: window)
+        XCTAssertTrue(prompt.contains("21 [00:21.0–00:21.5] фраза 21"))
+        XCTAssertTrue(prompt.contains("от 51 до 100"))
         XCTAssertEqual(RetakePrompt.timecode(83.44), "01:23.4")
+
+        let schema = RetakePrompt.jsonSchema(for: window)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(schema.utf8)) as? [String: Any])
+        let items = try XCTUnwrap(
+            ((object["properties"] as? [String: Any])?["remove"] as? [String: Any])?["items"] as? [String: Any])
+        let properties = try XCTUnwrap(items["properties"] as? [String: Any])
+        let ids = try XCTUnwrap((properties["id"] as? [String: Any])?["enum"] as? [Int])
+        let kept = try XCTUnwrap((properties["kept"] as? [String: Any])?["enum"] as? [Int])
+        XCTAssertEqual(ids, Array(51...100))
+        XCTAssertEqual(kept, [0] + Array(21...115))
     }
 }

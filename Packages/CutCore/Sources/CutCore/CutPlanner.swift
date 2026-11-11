@@ -115,7 +115,7 @@ public enum CutPlanner {
             cuts.append(
                 Cut(
                     start: range.start, end: range.end, kind: removal.reason.cutKind,
-                    phraseID: phrase.id))
+                    phraseID: phrase.id, note: removal.kept.map { "повторяется во фразе \($0)" }))
         }
         return cuts.sorted { $0.start < $1.start }
     }
