@@ -52,3 +52,9 @@ final class ProgressThrottle: Sendable {
         Task { @MainActor in handler(value) }
     }
 }
+
+/// Обёртка для объектов AVFoundation, которые не помечены Sendable, но используются строго на одной очереди.
+struct UncheckedBox<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) { self.value = value }
+}
