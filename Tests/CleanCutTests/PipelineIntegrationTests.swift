@@ -182,6 +182,14 @@ final class PipelineIntegrationTests: XCTestCase {
     }
 }
 
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    var value: Int { lock.withLock { stored } }
+    func increment(by amount: Int = 1) { lock.withLock { stored += amount } }
+}
+
 private final class ProgressBox: @unchecked Sendable {
     private let lock = NSLock()
     private var stored = 0.0
@@ -230,61 +238,89 @@ enum TestVideo {
         XCTAssertTrue(writer.startWriting(), "\(String(describing: writer.error))")
         writer.startSession(atSourceTime: .zero)
 
-        // Пишем вперемешку по 0.1 с видео и звука: иначе райтер ждёт отстающую дорожку и перестаёт принимать данные.
         let frameCount = Int((duration * Double(fps)).rounded())
         let totalSamples = Int(duration * Double(sampleRate))
         let chunk = sampleRate / 10
-        var frame = 0
-        var position = 0
-        while frame < frameCount || position < totalSamples {
-            let until = Double(position + chunk) / Double(sampleRate)
+        let failures = Counter()
 
-            // Видео: цвет кадра меняется, чтобы кодеру было что сжимать.
-            while frame < frameCount, Double(frame) / Double(fps) < until {
-                try await waitUntilReady(videoInput)
-                var buffer: CVPixelBuffer?
-                CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &buffer)
-                let pixelBuffer = try XCTUnwrap(buffer)
-                CVPixelBufferLockBaseAddress(pixelBuffer, [])
-                if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
-                    let length = CVPixelBufferGetBytesPerRow(pixelBuffer) * CVPixelBufferGetHeight(pixelBuffer)
-                    memset(base, Int32((frame * 5) % 256), length)
-                }
-                CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-                XCTAssertTrue(
-                    adaptor.append(
-                        pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))))
-                frame += 1
+        // Видео: цвет кадра меняется, чтобы кодеру было что сжимать.
+        let videoBox = UncheckedBox((videoInput, adaptor))
+        let frames = Counter()
+        async let videoDone: Void = feed(UncheckedBox(videoInput), queue: DispatchQueue(label: "test.video")) {
+            let (_, adaptor) = videoBox.value
+            let frame = frames.value
+            guard frame < frameCount else { return false }
+            var buffer: CVPixelBuffer?
+            guard let pool = adaptor.pixelBufferPool else {
+                failures.increment()
+                return false
             }
-            if frame == frameCount { videoInput.markAsFinished(); frame += 1 }
-
-            // Звук: тон 300 Гц внутри заданных интервалов.
-            if position < totalSamples {
-                try await waitUntilReady(audioInput)
-                let count = min(chunk, totalSamples - position)
-                var pcm = [Int16](repeating: 0, count: count)
-                for index in 0..<count {
-                    let time = Double(position + index) / Double(sampleRate)
-                    if tones.contains(where: { time >= $0.0 && time < $0.1 }) {
-                        pcm[index] = Int16(9000 * sin(2 * Double.pi * 300 * time))
-                    }
-                }
-                XCTAssertTrue(audioInput.append(try audioBuffer(pcm, at: position)))
-                position += count
-                if position >= totalSamples { audioInput.markAsFinished() }
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            guard let pixelBuffer = buffer else {
+                failures.increment()
+                return false
             }
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                let length = CVPixelBufferGetBytesPerRow(pixelBuffer) * CVPixelBufferGetHeight(pixelBuffer)
+                memset(base, Int32((frame * 5) % 256), length)
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            if !adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))) {
+                failures.increment()
+                return false
+            }
+            frames.increment()
+            return true
         }
+
+        // Звук: тон 300 Гц внутри заданных интервалов.
+        let audioBox = UncheckedBox(audioInput)
+        let written = Counter()
+        let toneRanges = tones.map { TimeRange(start: $0.0, end: $0.1) }
+        async let audioDone: Void = feed(audioBox, queue: DispatchQueue(label: "test.audio")) {
+            let position = written.value
+            guard position < totalSamples else { return false }
+            let count = min(chunk, totalSamples - position)
+            var pcm = [Int16](repeating: 0, count: count)
+            for index in 0..<count {
+                let time = Double(position + index) / Double(sampleRate)
+                if toneRanges.contains(where: { $0.contains(time) }) {
+                    pcm[index] = Int16(9000 * sin(2 * Double.pi * 300 * time))
+                }
+            }
+            guard let buffer = try? audioBuffer(pcm, at: position), audioBox.value.append(buffer) else {
+                failures.increment()
+                return false
+            }
+            written.increment(by: count)
+            return true
+        }
+        _ = await (videoDone, audioDone)
+        XCTAssertEqual(failures.value, 0)
+        XCTAssertEqual(frames.value, frameCount)
 
         await writer.finishWriting()
         XCTAssertEqual(writer.status, .completed, "\(String(describing: writer.error))")
     }
 
-    private static func waitUntilReady(_ input: AVAssetWriterInput) async throws {
-        var waited = 0
-        while !input.isReadyForMoreMediaData {
-            try await Task.sleep(for: .milliseconds(5))
-            waited += 1
-            if waited > 4000 { throw CocoaError(.fileWriteUnknown) }
+    /// Кормит вход райтера, пока `next` возвращает true.
+    private static func feed(
+        _ input: UncheckedBox<AVAssetWriterInput>, queue: DispatchQueue, next: @escaping @Sendable () -> Bool
+    ) async {
+        let finished = Counter()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            input.value.requestMediaDataWhenReady(on: queue) {
+                guard finished.value == 0 else { return }
+                while input.value.isReadyForMoreMediaData {
+                    if !next() {
+                        finished.increment()
+                        input.value.markAsFinished()
+                        continuation.resume()
+                        return
+                    }
+                }
+            }
         }
     }
 
