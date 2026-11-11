@@ -144,7 +144,8 @@ final class PipelineIntegrationTests: XCTestCase {
             _ in
         }
         let output = AVURLAsset(url: outputURL)
-        let video = try XCTUnwrap(try await output.loadTracks(withMediaType: .video).first)
+        let tracks = try await output.loadTracks(withMediaType: .video)
+        let video = try XCTUnwrap(tracks.first)
         XCTAssertEqual(try countSamples(in: output, track: video), 45)
     }
 
