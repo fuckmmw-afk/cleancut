@@ -7,6 +7,19 @@ import XCTest
 /// русскую речь, которую CI синтезирует командой `say` (Fixtures/speech.wav).
 final class SpeechModelsTests: XCTestCase {
 
+    /// Скачивает модель тем же путём, что и кнопка в настройках.
+    @MainActor
+    private func install(_ kind: ModelKind) async throws {
+        let manager = ModelManager()
+        if manager.isInstalled(kind) { return }
+        manager.install(kind)
+        while case .working = manager.status(kind) {
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        XCTAssertTrue(manager.isInstalled(kind), "\(manager.status(kind))")
+        XCTAssertTrue(ModelLocator.isInstalled(kind))
+    }
+
     private func loadSpeech() async throws -> [Float] {
         let url = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "speech", withExtension: "wav"),
@@ -18,6 +31,7 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     func testSileroFindsSpeechAndThePause() async throws {
+        try await install(.silero)
         let samples = try await loadSpeech()
         let duration = Double(samples.count) / 16000
         let detection = try await SpeechDetector.detect(samples: samples, useSilero: true) { _ in }
@@ -32,6 +46,7 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     func testWhisperGivesWordTimestamps() async throws {
+        try await install(.whisper(.base))
         let samples = try await loadSpeech()
         let duration = Double(samples.count) / 16000
         let words = try await WhisperTranscriber.transcribe(samples: samples, model: .base) { _ in }
@@ -57,5 +72,22 @@ final class SpeechModelsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(phrases.count, 2)
         print("PHRASES: \(phrases.map { "\($0.id) [\($0.start)-\($0.end)] \($0.text)" })")
         print("HEURISTIC: \(HeuristicRetake.detect(phrases))")
+    }
+}
+
+final class ModelManagerTests: XCTestCase {
+    @MainActor
+    func testMissingModelsFollowSettings() {
+        let manager = ModelManager()
+        let settings = PipelineSettings(
+            minPause: 0.5, padding: 0.12, whisperModel: .base, retakeModel: .heuristic, useSilero: false)
+        let missing = manager.missing(for: settings, needsTranscription: false)
+        XCTAssertTrue(missing.isEmpty, "\(missing)")
+
+        var withLLM = settings
+        withLLM.retakeModel = .qwen1_7B
+        if !ModelLocator.isInstalled(.llm(.qwen1_7B)) {
+            XCTAssertEqual(manager.missing(for: withLLM, needsTranscription: false), [.llm(.qwen1_7B)])
+        }
     }
 }

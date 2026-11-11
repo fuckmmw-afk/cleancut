@@ -43,7 +43,7 @@ struct HeuristicRetakeDetector: RetakeDetector {
 enum RetakeDetectorFactory {
     static func make(_ model: RetakeModel) -> (any RetakeDetector)? {
         switch model {
-        case .qwen4B, .qwen1_7B: MLXRetakeDetector(modelID: model.rawValue)
+        case .qwen4B, .qwen1_7B: MLXRetakeDetector(model: model)
         case .heuristic: HeuristicRetakeDetector()
         case .off: nil
         }

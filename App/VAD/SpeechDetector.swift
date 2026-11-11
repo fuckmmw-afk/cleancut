@@ -24,6 +24,13 @@ enum SpeechDetector {
             progress(1)
             return Result(speech: speech, usedSilero: false, note: nil)
         }
+        guard ModelLocator.isSileroInstalled else {
+            let speech = EnergyVAD.speechRanges(samples: samples, sampleRate: rate)
+            progress(1)
+            return Result(
+                speech: speech, usedSilero: false,
+                note: "Silero VAD не скачан, паузы найдены по громкости. Скачай его в Настройки → Модели, он весит пару мегабайт.")
+        }
 
         do {
             let probabilities = try await sileroProbabilities(samples: samples, progress: progress)
@@ -52,7 +59,7 @@ enum SpeechDetector {
     private static func sileroProbabilities(
         samples: [Float], progress: @escaping @Sendable (Double) -> Void
     ) async throws -> [Float] {
-        // Модель (~2 МБ) скачивается при первом запуске.
+        // Модель уже лежит на устройстве: FluidAudio сначала ищет её локально и в сеть не ходит.
         let manager = try await VadManager(config: VadConfig())
 
         // Кормим кусками по ~2 минуты, чтобы показывать прогресс и реагировать на отмену.

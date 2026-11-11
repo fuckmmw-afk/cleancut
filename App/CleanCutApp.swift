@@ -5,6 +5,7 @@ struct CleanCutApp: App {
     @State private var settings = AppSettings()
     @State private var store = ProjectStore()
     @State private var thermal = ThermalMonitor()
+    @State private var models = ModelManager()
 
     init() {
         BackgroundKeeper.shared.registerIfPossible()
@@ -16,6 +17,7 @@ struct CleanCutApp: App {
                 .environment(settings)
                 .environment(store)
                 .environment(thermal)
+                .environment(models)
                 .preferredColorScheme(.dark)
                 .tint(Color.accentColor)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in

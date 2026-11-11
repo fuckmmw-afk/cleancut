@@ -98,6 +98,12 @@ targets:
     dependencies:
       - target: CleanCut
       - package: CutCore
+      - package: SwiftHuggingFace
+        product: HuggingFace
+      - package: MLXSwiftLM
+        product: MLXGuidedGeneration
+      - package: MLXSwiftLM
+        product: MLXLMCommon
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.cleancut.CleanCutTests

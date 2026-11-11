@@ -192,19 +192,16 @@ final class AnalysisModel {
         try Task.checkCancellation()
 
         // 3. Транскрипция.
-        enter(.whisper, detail: "Готовлю модель", fraction: nil)
+        enter(.whisper, detail: "Загружаю модель", fraction: nil)
         let modelTitle = settings.whisperModel.title
         let words = try await WhisperTranscriber.transcribe(samples: samples, model: settings.whisperModel) {
             [weak self] phase in
             Task { @MainActor in
                 switch phase {
-                case .downloading(let value):
-                    self?.update(
-                        .whisper, detail: "Скачиваю \(modelTitle): \(Int(value * 100))%", fraction: value * 0.2)
                 case .loading:
-                    self?.update(.whisper, detail: "Загружаю модель. В первый раз это может занять пару минут", fraction: nil)
+                    self?.update(.whisper, detail: "Загружаю \(modelTitle)", fraction: nil)
                 case .transcribing(let value):
-                    self?.update(.whisper, detail: "", fraction: 0.2 + value * 0.8)
+                    self?.update(.whisper, detail: "", fraction: value)
                 }
             }
         }
@@ -238,6 +235,11 @@ final class AnalysisModel {
         default: candidates = [.heuristic]
         }
 
+        // Берём только скачанные модели: в сеть обработка не ходит.
+        let missing = candidates.filter { $0.isLLM && ModelLocator.llmFolder($0) == nil }
+        if !missing.isEmpty { log.write("Не скачаны: \(missing.map(\.title))") }
+        candidates.removeAll { missing.contains($0) }
+
         var lastError: (any Error)?
         for candidate in candidates {
             guard let detector = RetakeDetectorFactory.make(candidate) else { continue }
@@ -247,12 +249,10 @@ final class AnalysisModel {
                 var outcome = try await detector.detect(phrases: phrases, log: log) { [weak self] phase in
                     Task { @MainActor in
                         switch phase {
-                        case .downloading(let value):
-                            self?.update(.llm, detail: "Скачиваю \(title): \(Int(value * 100))%", fraction: value * 0.2)
-                        case .loading:
-                            self?.update(.llm, detail: "Загружаю модель", fraction: nil)
+                        case .downloading, .loading:
+                            self?.update(.llm, detail: "Загружаю \(title)", fraction: nil)
                         case .analyzing(let value):
-                            self?.update(.llm, detail: "", fraction: 0.2 + value * 0.8)
+                            self?.update(.llm, detail: "", fraction: value)
                         }
                     }
                 }

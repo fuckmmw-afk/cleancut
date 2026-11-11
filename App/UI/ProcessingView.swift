@@ -7,9 +7,17 @@ struct ProcessingView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(AppSettings.self) private var settings
     @Environment(ThermalMonitor.self) private var thermal
+    @Environment(ModelManager.self) private var models
     @Environment(\.dismiss) private var dismiss
 
     @State private var model = AnalysisModel()
+    @State private var showSettings = false
+
+    private var missingModels: [ModelKind] {
+        guard let project = store.project(projectID) else { return [] }
+        let needsTranscription = project.stage == .imported || project.words.isEmpty
+        return models.missing(for: settings.pipeline, needsTranscription: needsTranscription)
+    }
 
     var body: some View {
         ScrollView {
@@ -20,6 +28,10 @@ struct ProcessingView: View {
                         Text("\(Format.duration(project.duration)) · \(Format.bytes(project.fileSize))")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
+                }
+
+                if !model.isRunning, model.state != .finished, !missingModels.isEmpty {
+                    missingModelsCard
                 }
 
                 VStack(spacing: 0) {
@@ -47,10 +59,16 @@ struct ProcessingView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(model.isRunning)
         .task {
-            if model.state == .idle { start() }
+            if model.state == .idle, missingModels.isEmpty { start() }
+        }
+        .onChange(of: missingModels.isEmpty) { _, ready in
+            if ready, model.state == .idle { start() }
         }
         .onChange(of: model.state) { _, state in
             if state == .finished { onFinished() }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
         .onDisappear { model.cancel() }
     }
@@ -61,6 +79,27 @@ struct ProcessingView: View {
         } else {
             return "Не сворачивай приложение и не блокируй экран до конца обработки, иначе система её остановит."
         }
+    }
+
+    private var missingModelsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Сначала скачай модели", systemImage: "arrow.down.circle")
+                .font(.headline)
+            Text("Для обработки с текущими настройками не хватает моделей. Их нужно скачать один раз, дальше всё работает без интернета. Обработка начнётся сама, когда они скачаются.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            ForEach(missingModels) { kind in
+                ModelRow(kind: kind, inUse: true)
+            }
+            Button {
+                showSettings = true
+            } label: {
+                Text("Открыть настройки моделей").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(14)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
     }
 
     @ViewBuilder
@@ -85,6 +124,14 @@ struct ProcessingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(!missingModels.isEmpty)
+                Button {
+                    showSettings = true
+                } label: {
+                    Text("Настройки моделей").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
         case .cancelled:
             VStack(alignment: .leading, spacing: 12) {
@@ -96,6 +143,7 @@ struct ProcessingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(!missingModels.isEmpty)
             }
         case .idle, .finished:
             EmptyView()
@@ -103,6 +151,7 @@ struct ProcessingView: View {
     }
 
     private func start() {
+        guard missingModels.isEmpty else { return }
         model.start(projectID: projectID, store: store, settings: settings.pipeline)
     }
 }

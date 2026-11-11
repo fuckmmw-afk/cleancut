@@ -2,35 +2,29 @@ import CutCore
 import Foundation
 @preconcurrency import WhisperKit
 
-/// Транскрипция через WhisperKit с таймкодами по словам.
+/// Транскрипция через WhisperKit с таймкодами по словам. Модель берётся только с устройства.
 enum WhisperTranscriber {
 
     enum Phase: Sendable {
-        case downloading(Double)
         case loading
         case transcribing(Double)
     }
 
-    /// Скачивает модель при необходимости, распознаёт речь и выгружает модель из памяти перед возвратом.
+    /// Распознаёт речь и выгружает модель из памяти перед возвратом.
     static func transcribe(
         samples: [Float], model: WhisperModel, onPhase: @escaping @Sendable (Phase) -> Void
     ) async throws -> [Word] {
-        onPhase(.downloading(0))
-        let folder: URL
-        do {
-            folder = try await WhisperKit.download(
-                variant: model.rawValue,
-                downloadBase: ModelStore.whisper,
-                progressCallback: { progress in onPhase(.downloading(progress.fractionCompleted)) })
-        } catch {
-            throw AppError.wrap(error, title: "Модель Whisper не скачалась")
+        guard let folder = ModelLocator.whisperFolder(model) else {
+            throw AppError(
+                "Модель не скачана",
+                "Whisper \(model.title) не скачана. Открой Настройки → Модели и скачай её, это нужно один раз.")
         }
-        try Task.checkCancellation()
 
         onPhase(.loading)
         let config = WhisperKitConfig(
             downloadBase: ModelStore.whisper,
             modelFolder: folder.path,
+            tokenizerFolder: ModelStore.whisper,
             verbose: false,
             logLevel: .error,
             prewarm: false,
@@ -42,7 +36,7 @@ enum WhisperTranscriber {
         } catch {
             throw AppError(
                 "Whisper не загрузился",
-                "Не получилось загрузить модель распознавания. Попробуй модель полегче в настройках или удали модели и скачай заново. (\(error.localizedDescription))"
+                "Не получилось загрузить модель распознавания. Удали её в Настройки → Модели и скачай заново. (\(error.localizedDescription))"
             )
         }
 

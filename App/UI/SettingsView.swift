@@ -1,16 +1,53 @@
 import SwiftUI
 
 struct SettingsView: View {
+    private var selectedKinds: [ModelKind] {
+        var kinds: [ModelKind] = [.whisper(settings.whisperModel)]
+        if settings.useSilero { kinds.append(.silero) }
+        if settings.retakeModel.isLLM { kinds.append(.llm(settings.retakeModel)) }
+        return kinds
+    }
+
+    private func isSelected(_ kind: ModelKind) -> Bool { selectedKinds.contains(kind) }
+
+    private var missingSelected: [ModelKind] {
+        selectedKinds.filter { kind in
+            switch models.status(kind) {
+            case .installed, .working: false
+            default: true
+            }
+        }
+    }
+
     @Environment(AppSettings.self) private var settings
+    @Environment(ModelManager.self) private var models
     @Environment(\.dismiss) private var dismiss
 
-    @State private var modelsSize: Int64 = 0
     @State private var confirmDelete = false
 
     var body: some View {
         @Bindable var settings = settings
         NavigationStack {
             Form {
+                Section {
+                    ForEach(ModelKind.all) { kind in
+                        ModelRow(kind: kind, inUse: isSelected(kind))
+                    }
+                    if !missingSelected.isEmpty {
+                        Button {
+                            for kind in missingSelected { models.install(kind) }
+                        } label: {
+                            Label(
+                                "Скачать выбранные (\(Format.bytes(missingSelected.reduce(0) { $0 + $1.estimatedSize })))",
+                                systemImage: "arrow.down.circle.fill")
+                        }
+                    }
+                } header: {
+                    Text("Модели")
+                } footer: {
+                    Text("Модели скачиваются здесь один раз, дальше обработка работает без интернета. «Выбрана» — модель, которая сейчас указана в настройках ниже. Пока идёт скачивание, не сворачивай приложение.")
+                }
+
                 Section {
                     VStack(alignment: .leading) {
                         Text("Вырезать паузы длиннее \(settings.minPause, format: .number.precision(.fractionLength(2))) с")
@@ -32,7 +69,8 @@ struct SettingsView: View {
                         ForEach(WhisperModel.allCases) { model in
                             VStack(alignment: .leading) {
                                 Text(model.title)
-                                Text(model.detail).font(.footnote).foregroundStyle(.secondary)
+                                Text(model.detail + (models.isInstalled(.whisper(model)) ? "" : " · не скачана"))
+                                    .font(.footnote).foregroundStyle(.secondary)
                             }
                             .tag(model)
                         }
@@ -48,7 +86,11 @@ struct SettingsView: View {
                         ForEach(RetakeModel.allCases) { model in
                             VStack(alignment: .leading) {
                                 Text(model.title)
-                                Text(model.detail).font(.footnote).foregroundStyle(.secondary)
+                                Text(
+                                    model.detail
+                                        + (model.isLLM && !models.isInstalled(.llm(model)) ? " · не скачана" : "")
+                                )
+                                .font(.footnote).foregroundStyle(.secondary)
                             }
                             .tag(model)
                         }
@@ -58,7 +100,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Поиск дублей")
                 } footer: {
-                    Text("Если большой модели не хватит памяти, приложение само переключится на запасную.")
+                    Text("Если большой модели не хватит памяти, приложение переключится на запасную, когда она скачана.")
                 }
 
                 Section {
@@ -77,11 +119,9 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Скачанные модели", value: Format.bytes(modelsSize))
-                    Button("Удалить модели", role: .destructive) { confirmDelete = true }
-                        .disabled(modelsSize == 0)
-                } footer: {
-                    Text("Модели скачиваются при первой обработке. После этого интернет не нужен.")
+                    LabeledContent("Занято моделями", value: Format.bytes(models.totalSize))
+                    Button("Удалить все модели", role: .destructive) { confirmDelete = true }
+                        .disabled(models.totalSize == 0 || models.isBusy)
                 }
             }
             .navigationTitle("Настройки")
@@ -93,15 +133,96 @@ struct SettingsView: View {
             }
             .confirmationDialog("Удалить скачанные модели?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Удалить", role: .destructive) {
-                    ModelStore.deleteAll()
-                    modelsSize = 0
+                    models.deleteAll()
                 }
             } message: {
-                Text("При следующей обработке они скачаются заново.")
+                Text("Чтобы снова обрабатывать видео, их нужно будет скачать заново.")
             }
-            .task {
-                modelsSize = await Task.detached { ModelStore.totalSize() }.value
+            .onAppear { models.refresh() }
+        }
+    }
+}
+
+/// Строка модели: размер, состояние, скачать / отменить / удалить.
+struct ModelRow: View {
+    let kind: ModelKind
+    var inUse = false
+
+    @Environment(ModelManager.self) private var models
+    @State private var confirmDelete = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(kind.title)
+                        if inUse {
+                            Text("выбрана")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.2), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                action
             }
+            if case .working(let fraction, let text) = models.status(kind) {
+                if let fraction {
+                    ProgressView(value: min(max(fraction, 0), 1))
+                } else {
+                    ProgressView(value: nil as Double?).progressViewStyle(.linear)
+                }
+                Text(text + (fraction.map { " · \(Int($0 * 100))%" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if case .failed(let message) = models.status(kind) {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .confirmationDialog("Удалить \(kind.title)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Удалить", role: .destructive) { models.delete(kind) }
+        }
+    }
+
+    private var subtitle: String {
+        switch models.status(kind) {
+        case .installed(let size): "\(kind.purpose) · скачана, \(Format.bytes(size))"
+        default: "\(kind.purpose) · ≈ \(Format.bytes(kind.estimatedSize))"
+        }
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch models.status(kind) {
+        case .installed:
+            Button(role: .destructive) {
+                confirmDelete = true
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Удалить")
+        case .working:
+            Button {
+                models.cancel(kind)
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Отменить")
+        case .notInstalled, .failed:
+            Button {
+                models.install(kind)
+            } label: {
+                Image(systemName: "arrow.down.circle")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Скачать")
         }
     }
 }

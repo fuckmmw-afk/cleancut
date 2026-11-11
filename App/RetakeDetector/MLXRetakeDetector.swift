@@ -1,6 +1,5 @@
 import CutCore
 import Foundation
-import HuggingFace
 import MLX
 import MLXGuidedGeneration
 import MLXLLM
@@ -12,7 +11,8 @@ import Tokenizers
 /// Модель видит транскрипт целиком (длинный — окнами с контекстом до и после), отвечает строго по JSON-схеме,
 /// а каждое её решение потом проверяется по тексту в `RetakeValidator`.
 struct MLXRetakeDetector: RetakeDetector {
-    let modelID: String
+    let model: RetakeModel
+    var modelID: String { model.rawValue }
     /// Сколько раз повторить запрос, если обычная генерация вернула кривой JSON.
     var maxRetries = 2
 
@@ -77,22 +77,30 @@ struct MLXRetakeDetector: RetakeDetector {
     private func loadModel(
         log: AnalysisLog, onPhase: @escaping @Sendable (RetakePhase) -> Void
     ) async throws -> ModelContainer {
+        guard let folder = ModelLocator.llmFolder(model) else {
+            throw AppError(
+                "Модель не скачана", "\(model.title) не скачана. Открой Настройки → Модели и скачай её.")
+        }
+        let broken = SafetensorsCheck.brokenFiles(in: folder)
+        log.write("Файлы модели: \(SafetensorsCheck.describe(folder))")
+        guard broken.isEmpty else {
+            throw AppError(
+                "Файл модели повреждён",
+                "\(model.title) скачалась не полностью. Удали её в Настройки → Модели и скачай заново.")
+        }
+
         let configuration = ModelConfiguration(id: modelID, extraEOSTokens: ["<|im_end|>"])
         var lastError: (any Error)?
-        // Вторая попытка нужна, если первая упала на памяти или на повреждённом файле:
-        // загрузчик сам проверяет файлы и докачивает испорченные.
+        // Вторая попытка нужна, если первая упала из-за нехватки памяти.
         for attempt in 1...2 {
-            onPhase(.downloading(0))
+            onPhase(.loading)
             log.memory("Загрузка \(modelID), попытка \(attempt)")
             do {
                 return try await LLMModelFactory.shared.loadContainer(
-                    from: HubDownloader(log: log),
+                    from: LocalModelDownloader(folder: folder),
                     using: TransformersTokenizerLoader(),
                     configuration: configuration,
-                    progressHandler: { progress in
-                        let fraction = progress.fractionCompleted
-                        onPhase(fraction >= 1 ? .loading : .downloading(fraction))
-                    })
+                    progressHandler: { _ in onPhase(.loading) })
             } catch {
                 if Task.isCancelled || error is CancellationError { throw CancellationError() }
                 lastError = error
@@ -215,14 +223,9 @@ struct MLXRetakeDetector: RetakeDetector {
 
 // MARK: - Мосты к загрузчику и токенайзеру Hugging Face
 
-/// Скачивает веса с Hugging Face в каталог моделей приложения и проверяет, что файлы целые.
-private struct HubDownloader: MLXLMCommon.Downloader {
-    let log: AnalysisLog
-    private let client = HubClient(cache: HubCache(cacheDirectory: ModelStore.huggingFace))
-
-    init(log: AnalysisLog) {
-        self.log = log
-    }
+/// Отдаёт загрузчику MLX уже скачанную модель. В сеть не ходит: модели скачиваются в настройках.
+private struct LocalModelDownloader: MLXLMCommon.Downloader {
+    let folder: URL
 
     func download(
         id: String,
@@ -231,77 +234,14 @@ private struct HubDownloader: MLXLMCommon.Downloader {
         useLatest: Bool,
         progressHandler: @Sendable @escaping (Progress) -> Void
     ) async throws -> URL {
-        guard let repoID = Repo.ID(rawValue: id) else {
-            throw AppError("Неверная модель", "Не получилось разобрать идентификатор модели «\(id)».")
-        }
-        for attempt in 1...2 {
-            let directory = try await client.downloadSnapshot(
-                of: repoID,
-                revision: revision ?? "main",
-                matching: patterns,
-                progressHandler: { @MainActor progress in
-                    progressHandler(progress)
-                })
-            let broken = SafetensorsCheck.brokenFiles(in: directory)
-            if broken.isEmpty {
-                log.write("Файлы модели в порядке: \(SafetensorsCheck.describe(directory))")
-                return directory
-            }
-            log.write("Повреждённые файлы модели (попытка \(attempt)): \(broken.map(\.lastPathComponent)), удаляю и качаю заново")
-            for file in broken {
-                // В кэше Hugging Face файл снимка — ссылка на blob. Удаляем и то и другое.
-                let target = file.resolvingSymlinksInPath()
-                try? FileManager.default.removeItem(at: target)
-                try? FileManager.default.removeItem(at: file)
-            }
-        }
-        throw AppError(
-            "Модель скачалась с ошибкой",
-            "Файл модели повреждён даже после повторной загрузки. Проверь свободное место и интернет и попробуй ещё раз.")
+        let progress = Progress(totalUnitCount: 1)
+        progress.completedUnitCount = 1
+        progressHandler(progress)
+        return folder
     }
 }
 
-/// Проверка целостности safetensors: размер файла должен совпадать с тем, что записано в его заголовке.
-enum SafetensorsCheck {
-    static func brokenFiles(in directory: URL) -> [URL] {
-        let files =
-            (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "safetensors" && !isComplete($0) }
-    }
-
-    static func describe(_ directory: URL) -> String {
-        let files =
-            (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "safetensors" }
-            .map { "\($0.lastPathComponent) \(Format.bytes(Disk.fileSize($0.resolvingSymlinksInPath())))" }
-            .joined(separator: ", ")
-    }
-
-    static func isComplete(_ url: URL) -> Bool {
-        let resolved = url.resolvingSymlinksInPath()
-        guard let handle = try? FileHandle(forReadingFrom: resolved) else { return false }
-        defer { try? handle.close() }
-        guard let lengthData = try? handle.read(upToCount: 8), lengthData.count == 8 else { return false }
-        let headerLength = lengthData.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }.littleEndian
-        guard headerLength > 0, headerLength < 100_000_000,
-            let headerData = try? handle.read(upToCount: Int(headerLength)), headerData.count == Int(headerLength),
-            let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any]
-        else { return false }
-
-        var dataEnd: UInt64 = 0
-        for (name, value) in header where name != "__metadata__" {
-            guard let entry = value as? [String: Any], let offsets = entry["data_offsets"] as? [NSNumber],
-                offsets.count == 2
-            else { return false }
-            dataEnd = max(dataEnd, offsets[1].uint64Value)
-        }
-        let expected = 8 + headerLength + dataEnd
-        let actual = UInt64(Disk.fileSize(resolved))
-        return actual == expected
-    }
-}
-
-private struct TransformersTokenizerLoader: MLXLMCommon.TokenizerLoader {
+struct TransformersTokenizerLoader: MLXLMCommon.TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let upstream = try await AutoTokenizer.from(modelFolder: directory)
         return TokenizerBridge(upstream: upstream)
