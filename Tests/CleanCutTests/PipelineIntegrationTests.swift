@@ -230,42 +230,50 @@ enum TestVideo {
         XCTAssertTrue(writer.startWriting(), "\(String(describing: writer.error))")
         writer.startSession(atSourceTime: .zero)
 
-        // Видео: цвет кадра меняется, чтобы кодеру было что сжимать.
+        // Пишем вперемешку по 0.1 с видео и звука: иначе райтер ждёт отстающую дорожку и перестаёт принимать данные.
         let frameCount = Int((duration * Double(fps)).rounded())
-        for frame in 0..<frameCount {
-            try await waitUntilReady(videoInput)
-            var buffer: CVPixelBuffer?
-            CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &buffer)
-            let pixelBuffer = try XCTUnwrap(buffer)
-            CVPixelBufferLockBaseAddress(pixelBuffer, [])
-            if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
-                let length = CVPixelBufferGetBytesPerRow(pixelBuffer) * CVPixelBufferGetHeight(pixelBuffer)
-                memset(base, Int32((frame * 5) % 256), length)
-            }
-            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-            XCTAssertTrue(
-                adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))))
-        }
-        videoInput.markAsFinished()
-
-        // Звук: тон 300 Гц внутри заданных интервалов.
         let totalSamples = Int(duration * Double(sampleRate))
-        let chunk = 4800
+        let chunk = sampleRate / 10
+        var frame = 0
         var position = 0
-        while position < totalSamples {
-            try await waitUntilReady(audioInput)
-            let count = min(chunk, totalSamples - position)
-            var pcm = [Int16](repeating: 0, count: count)
-            for index in 0..<count {
-                let time = Double(position + index) / Double(sampleRate)
-                if tones.contains(where: { time >= $0.0 && time < $0.1 }) {
-                    pcm[index] = Int16(9000 * sin(2 * Double.pi * 300 * time))
+        while frame < frameCount || position < totalSamples {
+            let until = Double(position + chunk) / Double(sampleRate)
+
+            // Видео: цвет кадра меняется, чтобы кодеру было что сжимать.
+            while frame < frameCount, Double(frame) / Double(fps) < until {
+                try await waitUntilReady(videoInput)
+                var buffer: CVPixelBuffer?
+                CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &buffer)
+                let pixelBuffer = try XCTUnwrap(buffer)
+                CVPixelBufferLockBaseAddress(pixelBuffer, [])
+                if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                    let length = CVPixelBufferGetBytesPerRow(pixelBuffer) * CVPixelBufferGetHeight(pixelBuffer)
+                    memset(base, Int32((frame * 5) % 256), length)
                 }
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+                XCTAssertTrue(
+                    adaptor.append(
+                        pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: Int32(fps))))
+                frame += 1
             }
-            XCTAssertTrue(audioInput.append(try audioBuffer(pcm, at: position)))
-            position += count
+            if frame == frameCount { videoInput.markAsFinished(); frame += 1 }
+
+            // Звук: тон 300 Гц внутри заданных интервалов.
+            if position < totalSamples {
+                try await waitUntilReady(audioInput)
+                let count = min(chunk, totalSamples - position)
+                var pcm = [Int16](repeating: 0, count: count)
+                for index in 0..<count {
+                    let time = Double(position + index) / Double(sampleRate)
+                    if tones.contains(where: { time >= $0.0 && time < $0.1 }) {
+                        pcm[index] = Int16(9000 * sin(2 * Double.pi * 300 * time))
+                    }
+                }
+                XCTAssertTrue(audioInput.append(try audioBuffer(pcm, at: position)))
+                position += count
+                if position >= totalSamples { audioInput.markAsFinished() }
+            }
         }
-        audioInput.markAsFinished()
 
         await writer.finishWriting()
         XCTAssertEqual(writer.status, .completed, "\(String(describing: writer.error))")
@@ -276,7 +284,7 @@ enum TestVideo {
         while !input.isReadyForMoreMediaData {
             try await Task.sleep(for: .milliseconds(5))
             waited += 1
-            if waited > 4000 { throw XCTSkip("writer input never became ready") }
+            if waited > 4000 { throw CocoaError(.fileWriteUnknown) }
         }
     }
 
