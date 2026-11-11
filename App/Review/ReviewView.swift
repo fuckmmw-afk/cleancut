@@ -270,8 +270,8 @@ private struct PhraseRow: View {
         for index in phrase.wordRange where model.project.words.indices.contains(index) {
             var run = AttributedString(model.project.words[index].text + " ")
             if let kind = kind(at: index) {
-                run.strikethroughStyle = .single
-                run.foregroundColor = kind.color
+                run.swiftUI.strikethroughStyle = Text.LineStyle.single
+                run.swiftUI.foregroundColor = kind.color
             }
             result.append(run)
         }

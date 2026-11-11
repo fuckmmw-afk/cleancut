@@ -20,7 +20,7 @@ struct MLXRetakeDetector: RetakeDetector {
         guard !phrases.isEmpty else { return RetakeOutcome(removals: []) }
 
         // Буферы MLX не должны разрастаться: память нужна под веса.
-        Memory.cacheLimit = 32 * 1024 * 1024
+        MLX.Memory.cacheLimit = 32 * 1024 * 1024
 
         onPhase(.downloading(0))
         let container: ModelContainer
@@ -37,7 +37,7 @@ struct MLXRetakeDetector: RetakeDetector {
             if Task.isCancelled { throw CancellationError() }
             throw AppError.wrap(error, title: "Языковая модель не загрузилась")
         }
-        defer { Memory.clearCache() }
+        defer { MLX.Memory.clearCache() }
         try Task.checkCancellation()
 
         let chunks = RetakePrompt.chunks(phrases, size: chunkSize, overlap: overlap)
@@ -51,7 +51,7 @@ struct MLXRetakeDetector: RetakeDetector {
             } else {
                 failed += 1
             }
-            Memory.clearCache()
+            MLX.Memory.clearCache()
         }
         onPhase(.analyzing(1))
 
