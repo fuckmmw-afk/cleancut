@@ -88,11 +88,28 @@ targets:
       path: App/CleanCut.entitlements
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
+  CleanCutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CleanCutTests
+    dependencies:
+      - target: CleanCut
+      - package: CutCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.cleancut.CleanCutTests
+        GENERATE_INFOPLIST_FILE: "YES"
 schemes:
   CleanCut:
     build:
       targets:
         CleanCut: all
+        CleanCutTests: [test]
+    test:
+      config: Debug
+      targets:
+        - CleanCutTests
     run:
       config: Debug
     archive:
