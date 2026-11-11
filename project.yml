@@ -22,6 +22,9 @@ packages:
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     exactVersion: 3.32.3
+  MLXSwift:
+    url: https://github.com/ml-explore/mlx-swift
+    minorVersion: 0.32.3
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: 0.18.3
@@ -45,6 +48,8 @@ targets:
         product: MLXLLM
       - package: MLXSwiftLM
         product: MLXLMCommon
+      - package: MLXSwift
+        product: MLX
       - package: FluidAudio
         product: FluidAudio
       - package: SwiftHuggingFace
