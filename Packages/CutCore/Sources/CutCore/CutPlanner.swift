@@ -6,19 +6,22 @@ public enum CutPlanner {
     public struct Options: Sendable, Equatable {
         /// Паузы короче этого значения не вырезаются.
         public var minPause: Double
-        /// Отступ, который остаётся вокруг речи.
+        /// Отступ, который остаётся перед началом речи.
         public var padding: Double
+        /// Отступ, который остаётся после конца речи. Обычно меньше: тишина после фразы заметнее.
+        public var tailPadding: Double
         /// Оставшиеся куски короче этого значения выкидываются целиком.
         public var minKeep: Double
         /// Резы короче этого значения не имеют смысла (меньше пары кадров).
         public var minCut: Double
 
         public init(
-            minPause: Double = 0.5, padding: Double = 0.12, minKeep: Double = 0.15,
+            minPause: Double = 0.5, padding: Double = 0.12, tailPadding: Double? = nil, minKeep: Double = 0.15,
             minCut: Double = 0.04
         ) {
             self.minPause = minPause
             self.padding = padding
+            self.tailPadding = tailPadding ?? padding
             self.minKeep = minKeep
             self.minCut = minCut
         }
@@ -63,7 +66,7 @@ public enum CutPlanner {
         guard !speech.isEmpty else { return [] }
         var cuts: [TimeRange] = []
         for gap in complement(of: speech, duration: duration) where gap.duration >= options.minPause {
-            let start = gap.start <= 0 ? 0 : gap.start + options.padding
+            let start = gap.start <= 0 ? 0 : gap.start + options.tailPadding
             let end = gap.end >= duration ? duration : gap.end - options.padding
             if end - start >= options.minCut {
                 cuts.append(TimeRange(start: start, end: end))
@@ -79,8 +82,9 @@ public enum CutPlanner {
     /// Вырезается сами слова и пауза после них, а «вдох» перед следующим словом остаётся.
     /// Так подряд идущие вырезанные куски склеиваются без дыр, а ритм речи на стыке сохраняется.
     public static func cutRange(
-        forWords range: Range<Int>, in words: [Word], duration: Double, padding: Double
+        forWords range: Range<Int>, in words: [Word], duration: Double, padding: Double, tailPadding: Double? = nil
     ) -> TimeRange? {
+        let tailPadding = tailPadding ?? padding
         guard !range.isEmpty, range.lowerBound >= 0, range.upperBound <= words.count else { return nil }
 
         func lead(_ index: Int) -> Double {
@@ -94,7 +98,7 @@ public enum CutPlanner {
         if range.upperBound < words.count {
             end = words[range.upperBound].start - lead(range.upperBound)
         } else {
-            end = min(duration, words[range.upperBound - 1].end + padding)
+            end = min(duration, words[range.upperBound - 1].end + tailPadding)
         }
         guard end > start else { return nil }
         return TimeRange(start: start, end: end)
@@ -110,7 +114,8 @@ public enum CutPlanner {
         for removal in removals where seen.insert(removal.id).inserted {
             guard let phrase = byID[removal.id],
                 let range = cutRange(
-                    forWords: phrase.wordRange, in: words, duration: duration, padding: options.padding)
+                    forWords: phrase.wordRange, in: words, duration: duration, padding: options.padding,
+                    tailPadding: options.tailPadding)
             else { continue }
             cuts.append(
                 Cut(
@@ -118,6 +123,27 @@ public enum CutPlanner {
                     phraseID: phrase.id, note: removal.kept.map { "повторяется во фразе \($0)" }))
         }
         return cuts.sorted { $0.start < $1.start }
+    }
+
+    /// Резы по повторам, найденным без LLM.
+    public static func repeatCuts(
+        _ matches: [RepeatFinder.Match], words: [Word], duration: Double, options: Options
+    ) -> [Cut] {
+        matches.compactMap { match in
+            guard
+                let range = cutRange(
+                    forWords: match.words, in: words, duration: duration, padding: options.padding,
+                    tailPadding: options.tailPadding)
+            else { return nil }
+            switch match.kind {
+            case .sentence:
+                return Cut(
+                    start: range.start, end: range.end, kind: .retake, phraseID: match.phraseID,
+                    note: match.keptPhraseID.map { "повтор, оставлена последняя версия (фраза \($0))" })
+            case .restart:
+                return Cut(start: range.start, end: range.end, kind: .falseStart, note: "повтор слов")
+            }
+        }
     }
 
     // MARK: - Итог

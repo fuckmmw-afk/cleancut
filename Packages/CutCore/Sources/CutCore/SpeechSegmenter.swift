@@ -75,10 +75,12 @@ public enum SpeechSegmenter {
                 start = Double(first) * frameDuration
             }
 
-            // Конец: последний громкий кадр рядом с грубой границей.
+            // Конец: последний громкий кадр рядом с грубой границей. Порог чуть выше, чтобы выдох
+            // и хвост эха после фразы не считались речью.
+            let endThreshold = min(threshold + 4, loud - 6)
             let endLow = max(frame(end - hop), frame(start))
             let endHigh = frame(end + hop)
-            if endLow < endHigh, let last = (endLow..<endHigh).last(where: { levels[$0] >= threshold }) {
+            if endLow < endHigh, let last = (endLow..<endHigh).last(where: { levels[$0] >= endThreshold }) {
                 end = Double(last + 1) * frameDuration
             }
 

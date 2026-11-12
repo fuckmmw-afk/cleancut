@@ -80,7 +80,7 @@ final class ModelManagerTests: XCTestCase {
     func testMissingModelsFollowSettings() {
         let manager = ModelManager()
         let settings = PipelineSettings(
-            minPause: 0.5, padding: 0.12, whisperModel: .base, retakeModel: .heuristic, useSilero: false)
+            minPause: 0.5, padding: 0.12, tailPadding: 0.05, whisperModel: .base, retakeModel: .heuristic, useSilero: false)
         let missing = manager.missing(for: settings, needsTranscription: false)
         XCTAssertTrue(missing.isEmpty, "\(missing)")
 

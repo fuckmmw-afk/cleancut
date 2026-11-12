@@ -47,6 +47,12 @@ final class CutPlannerTests: XCTestCase {
         assertRanges(cuts, [r(2.12, 2.88)])
     }
 
+    func testTailPaddingIsSeparate() {
+        let asymmetric = CutPlanner.Options(minPause: 0.5, padding: 0.12, tailPadding: 0.05)
+        let cuts = CutPlanner.pauseCuts(speech: [r(0, 1.0), r(2.0, 3.0)], duration: 3, options: asymmetric)
+        assertRanges(cuts, [r(1.05, 1.88)])
+    }
+
     func testPauseCutsAtEdgesHaveNoOuterPadding() {
         let speech = [r(1.0, 2.0)]
         let cuts = CutPlanner.pauseCuts(speech: speech, duration: 4.0, options: options)
@@ -65,6 +71,7 @@ final class CutPlannerTests: XCTestCase {
     func testPaddingLargerThanPauseGivesNoCut() {
         var wide = options
         wide.padding = 0.3
+        wide.tailPadding = 0.3
         XCTAssertTrue(CutPlanner.pauseCuts(speech: [r(0, 1), r(1.55, 2)], duration: 2, options: wide).isEmpty)
     }
 

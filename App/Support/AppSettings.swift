@@ -59,12 +59,13 @@ enum RetakeModel: String, CaseIterable, Identifiable, Sendable {
 struct PipelineSettings: Sendable, Equatable {
     var minPause: Double
     var padding: Double
+    var tailPadding: Double
     var whisperModel: WhisperModel
     var retakeModel: RetakeModel
     var useSilero: Bool
 
     var plannerOptions: CutPlanner.Options {
-        CutPlanner.Options(minPause: minPause, padding: padding)
+        CutPlanner.Options(minPause: minPause, padding: padding, tailPadding: tailPadding)
     }
 }
 
@@ -75,6 +76,7 @@ final class AppSettings {
 
     var minPause: Double { didSet { defaults.set(minPause, forKey: "minPause") } }
     var paddingMs: Double { didSet { defaults.set(paddingMs, forKey: "paddingMs") } }
+    var tailPaddingMs: Double { didSet { defaults.set(tailPaddingMs, forKey: "tailPaddingMs") } }
     var whisperModel: WhisperModel { didSet { defaults.set(whisperModel.rawValue, forKey: "whisperModel") } }
     var retakeModel: RetakeModel { didSet { defaults.set(retakeModel.rawValue, forKey: "retakeModel") } }
     var useSilero: Bool { didSet { defaults.set(useSilero, forKey: "useSilero") } }
@@ -83,8 +85,9 @@ final class AppSettings {
     var bitrate60: Double { didSet { defaults.set(bitrate60, forKey: "bitrate60") } }
 
     init() {
-        minPause = defaults.object(forKey: "minPause") as? Double ?? 0.5
+        minPause = defaults.object(forKey: "minPause") as? Double ?? 0.4
         paddingMs = defaults.object(forKey: "paddingMs") as? Double ?? 120
+        tailPaddingMs = defaults.object(forKey: "tailPaddingMs") as? Double ?? 50
         whisperModel = WhisperModel(rawValue: defaults.string(forKey: "whisperModel") ?? "") ?? .largeV3Turbo
         retakeModel = RetakeModel(rawValue: defaults.string(forKey: "retakeModel") ?? "") ?? .qwen4B
         useSilero = defaults.object(forKey: "useSilero") as? Bool ?? true
@@ -94,7 +97,8 @@ final class AppSettings {
 
     var pipeline: PipelineSettings {
         PipelineSettings(
-            minPause: minPause, padding: paddingMs / 1000, whisperModel: whisperModel,
+            minPause: minPause, padding: paddingMs / 1000, tailPadding: tailPaddingMs / 1000,
+            whisperModel: whisperModel,
             retakeModel: retakeModel, useSilero: useSilero)
     }
 

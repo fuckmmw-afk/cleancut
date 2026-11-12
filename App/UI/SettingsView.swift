@@ -54,8 +54,12 @@ struct SettingsView: View {
                         Slider(value: $settings.minPause, in: 0.25...2, step: 0.05)
                     }
                     VStack(alignment: .leading) {
-                        Text("Отступ вокруг речи: \(Int(settings.paddingMs)) мс")
-                        Slider(value: $settings.paddingMs, in: 40...300, step: 10)
+                        Text("Отступ перед речью: \(Int(settings.paddingMs)) мс")
+                        Slider(value: $settings.paddingMs, in: 20...300, step: 10)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Тишина после фразы: \(Int(settings.tailPaddingMs)) мс")
+                        Slider(value: $settings.tailPaddingMs, in: 0...300, step: 10)
                     }
                     Toggle("Silero VAD", isOn: $settings.useSilero)
                 } header: {

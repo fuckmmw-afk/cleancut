@@ -31,7 +31,7 @@ struct MLXRetakeDetector: RetakeDetector {
 
         let windows = RetakePrompt.windows(phrases)
         log.write("Фраз: \(phrases.count), окон: \(windows.count)")
-        let grammar = await makeGrammarTokenizer(container: container, log: log)
+        let grammar = await makeGrammar(container: container, log: log)
 
         var results: [(window: RetakePrompt.Window, removals: [Removal])] = []
         var failed = 0
@@ -115,14 +115,30 @@ struct MLXRetakeDetector: RetakeDetector {
             "Не получилось загрузить \(modelID). \(AppError.wrap(lastError ?? CancellationError()).message)")
     }
 
-    private func makeGrammarTokenizer(container: ModelContainer, log: AnalysisLog) async -> GrammarTokenizer? {
+    /// Токенайзер грамматики и штрафы, которые не дают модели тратить токены на пробелы и не закрывать JSON.
+    private struct Grammar: @unchecked Sendable {
+        let tokenizer: GrammarTokenizer
+        let closingBias: MLXArray
+        let whitespaceBias: MLXArray
+        let whitespaceTokenIDs: Set<Int>
+    }
+
+    private func makeGrammar(container: ModelContainer, log: AnalysisLog) async -> Grammar? {
         do {
-            return try await container.perform { context in
+            let box = try await container.perform { context in
                 let vocab = TokenizerVocabExtractor.extractForGrammar(from: context.tokenizer)
-                return try GrammarTokenizer(
+                let tokenizer = try GrammarTokenizer(
                     vocab: vocab.vocab, vocabType: vocab.vocabType,
                     eosTokenId: Int32(context.tokenizer.eosTokenId ?? 0))
+                let closing = ClosingTokenBias.compute(
+                    tokenizer: context.tokenizer, eosTokenId: context.tokenizer.eosTokenId)
+                let whitespace = WhitespaceTokenBias.compute(tokenizer: context.tokenizer)
+                return UncheckedBox(
+                    Grammar(
+                        tokenizer: tokenizer, closingBias: closing, whitespaceBias: whitespace.bias,
+                        whitespaceTokenIDs: whitespace.tokenIDs))
             }
+            return box.value
         } catch {
             log.write("Строгая схема недоступна, будет обычная генерация: \(error)")
             return nil
@@ -133,7 +149,7 @@ struct MLXRetakeDetector: RetakeDetector {
 
     /// - Returns: nil, если модель так и не вернула корректный JSON.
     private func analyze(
-        _ window: RetakePrompt.Window, container: ModelContainer, grammar: GrammarTokenizer?, log: AnalysisLog
+        _ window: RetakePrompt.Window, container: ModelContainer, grammar: Grammar?, log: AnalysisLog
     ) async throws -> [Removal]? {
         let ids = window.ids
         let targets = window.targets
@@ -175,22 +191,29 @@ struct MLXRetakeDetector: RetakeDetector {
 
     /// Генерация, ограниченная JSON-схемой: ответ всегда валидный, номера фраз только из окна.
     private func guided(
-        _ window: RetakePrompt.Window, container: ModelContainer, grammar: GrammarTokenizer
+        _ window: RetakePrompt.Window, container: ModelContainer, grammar: Grammar
     ) async throws -> String {
         try await ForegroundGate.waitUntilForeground()
         let schema = RetakePrompt.jsonSchema(for: window)
         let input = chat(for: window, isRetry: false)
         let cancelled = CancelFlag()
         let inputBox = UncheckedBox(input)
+        let grammarBox = UncheckedBox(grammar)
         return try await withTaskCancellationHandler {
             try await container.perform { context in
+                let grammar = grammarBox.value
                 let constraint = try GrammarConstraint(
-                    tokenizer: grammar, jsonSchema: schema, fastForward: true, hostTokenizer: context.tokenizer)
+                    tokenizer: grammar.tokenizer, jsonSchema: schema, fastForward: true,
+                    hostTokenizer: context.tokenizer)
                 let prepared = try await context.processor.prepare(input: inputBox.value)
                 var output = ""
                 try GuidedGenerationLoop.run(
                     input: prepared, context: context, constraint: constraint, maxTokens: 1500,
-                    vocabSize: grammar.vocabSize
+                    vocabSize: grammar.tokenizer.vocabSize,
+                    completionReserve: 64,
+                    closingBias: grammar.closingBias,
+                    whitespaceBias: grammar.whitespaceBias,
+                    whitespaceTokenIDs: grammar.whitespaceTokenIDs
                 ) { delta in
                     output += delta
                     // GPU в фоне недоступен: ждём возврата на экран прямо здесь, на потоке генерации.

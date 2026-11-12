@@ -232,7 +232,8 @@ final class ReviewModel {
         } else if let index = project.cuts.firstIndex(where: { $0.phraseID == phrase.id && !$0.enabled }) {
             project.cuts[index].enabled = true
         } else if let range = CutPlanner.cutRange(
-            forWords: phrase.wordRange, in: project.words, duration: project.duration, padding: project.padding)
+            forWords: phrase.wordRange, in: project.words, duration: project.duration, padding: project.padding,
+            tailPadding: project.plannerOptions.tailPadding)
         {
             project.cuts.append(Cut(start: range.start, end: range.end, kind: .manual, phraseID: phrase.id))
         }
@@ -279,7 +280,7 @@ final class ReviewModel {
         guard let selection,
             let range = CutPlanner.cutRange(
                 forWords: selection.lowerBound..<(selection.upperBound + 1), in: project.words,
-                duration: project.duration, padding: project.padding)
+                duration: project.duration, padding: project.padding, tailPadding: project.plannerOptions.tailPadding)
         else { return }
         pushHistory()
         project.cuts.append(Cut(start: range.start, end: range.end, kind: .manual))
@@ -304,10 +305,11 @@ final class ReviewModel {
     }
 
     /// Пересчитывает паузы с новыми настройками. Дубли и ручные правки не трогает.
-    func recomputePauses(minPause: Double, padding: Double) {
+    func recomputePauses(minPause: Double, padding: Double, tailPadding: Double) {
         pushHistory()
         project.minPause = minPause
         project.padding = padding
+        project.tailPadding = tailPadding
         project.cuts.removeAll { $0.kind == .pause }
         project.cuts += CutPlanner.pauseCuts(
             speech: project.speech, duration: project.duration, options: project.plannerOptions

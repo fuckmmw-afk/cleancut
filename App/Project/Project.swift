@@ -32,9 +32,11 @@ struct Project: Codable, Identifiable, Sendable, Equatable {
     /// Настройки, с которыми считались паузы.
     var minPause: Double = 0.5
     var padding: Double = 0.12
+    /// Отступ после речи. В старых проектах его нет, тогда он равен отступу перед речью.
+    var tailPadding: Double?
 
     var plannerOptions: CutPlanner.Options {
-        CutPlanner.Options(minPause: minPause, padding: padding)
+        CutPlanner.Options(minPause: minPause, padding: padding, tailPadding: tailPadding)
     }
 
     var finalCuts: [TimeRange] {

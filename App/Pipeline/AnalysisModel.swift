@@ -122,13 +122,31 @@ final class AnalysisModel {
         // Паузы.
         project.minPause = settings.minPause
         project.padding = settings.padding
+        project.tailPadding = settings.tailPadding
         let options = settings.plannerOptions
         var cuts = CutPlanner.pauseCuts(speech: project.speech, duration: project.duration, options: options)
             .map { Cut(start: $0.start, end: $0.end, kind: .pause) }
 
-        // Дубли.
+        log.write("Транскрипт:\n" + project.phrases.map(RetakePrompt.line).joined(separator: "\n"))
+
+        // Повторы по словам: заикания, рестарты и одинаковые предложения. Остаётся последняя версия.
+        var repeatedPhrases = Set<Int>()
+        if settings.retakeModel != .off {
+            let matches = RepeatFinder.find(words: project.words, phrases: project.phrases)
+            for match in matches {
+                let text = match.words.map { project.words[$0].text }.joined(separator: " ")
+                log.write("Повтор (\(match.kind == .sentence ? "предложение" : "слова")): «\(text)»")
+                if let id = match.phraseID { repeatedPhrases.insert(id) }
+            }
+            cuts += CutPlanner.repeatCuts(
+                matches, words: project.words, duration: project.duration, options: options)
+        }
+
+        // Дубли, которые видит только LLM: по смыслу, а не по совпадению слов.
         enter(.llm, detail: "", fraction: nil)
-        let retakes = try await findRetakes(phrases: project.phrases, model: settings.retakeModel, log: log)
+        var retakes = try await findRetakes(phrases: project.phrases, model: settings.retakeModel, log: log)
+        retakes.removals.removeAll { repeatedPhrases.contains($0.id) }
+        retakes.rejected.removeAll { repeatedPhrases.contains($0.removal.id) }
         project.notes.removeAll { $0.hasPrefix(Self.retakeNotePrefix) }
         project.notes.append(contentsOf: retakes.notes.map { Self.retakeNotePrefix + $0 })
         cuts += CutPlanner.retakeCuts(
@@ -151,7 +169,7 @@ final class AnalysisModel {
         project.stage = .analyzed
         store.save(project)
         log.write(
-            "Готово: пауз \(cuts.filter { $0.kind == .pause }.count), вырезано фраз \(retakes.removals.count), отклонено \(retakes.rejected.count), итог \(Format.duration(project.outputDuration)) из \(Format.duration(project.duration))"
+            "Готово: пауз \(cuts.filter { $0.kind == .pause }.count), повторов \(cuts.filter { $0.kind != .pause && $0.enabled }.count - retakes.removals.count), LLM вырезала \(retakes.removals.count), отклонено \(retakes.rejected.count), итог \(Format.duration(project.outputDuration)) из \(Format.duration(project.duration))"
         )
     }
 

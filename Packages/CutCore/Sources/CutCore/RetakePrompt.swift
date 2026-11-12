@@ -31,7 +31,8 @@ public enum RetakePrompt {
         - фразы, которые продолжают мысль или добавляют новое, даже если в них есть те же слова;
         - перечисления, вопросы и ответы, сознательные повторы для акцента («это важно, очень важно»);
         - вступление, выводы, призывы подписаться;
-        - фразу, у которой нет более поздней замены (кроме "garbage").
+        - фразу, у которой нет более поздней замены (кроме "garbage");
+        - фразу только потому, что следующая фраза стоит рядом: "kept" должен ПОВТОРЯТЬ слова вырезаемой фразы.
         Если сомневаешься, НЕ вырезай. Пропустить дубль не страшно, вырезать нужную фразу плохо.
 
         Пример.
@@ -114,7 +115,7 @@ public enum RetakePrompt {
     public static func jsonSchema(for window: Window) -> String {
         let targets = window.targets.map(\.id).sorted().map(String.init).joined(separator: ",")
         let kept = ([0] + window.phrases.map(\.id)).sorted().map(String.init).joined(separator: ",")
-        let limit = max(1, window.targetIDs.count / 2)
+        let limit = min(25, max(1, window.targetIDs.count / 3))
         return """
             {"type":"object","properties":{"remove":{"type":"array","maxItems":\(limit),"items":{"type":"object",\
             "properties":{"id":{"enum":[\(targets)]},"kept":{"enum":[\(kept)]},\

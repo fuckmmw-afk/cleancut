@@ -37,7 +37,9 @@ struct ReviewView: View {
 
                     Menu {
                         Button {
-                            model.recomputePauses(minPause: settings.minPause, padding: settings.paddingMs / 1000)
+                            model.recomputePauses(
+                                minPause: settings.minPause, padding: settings.paddingMs / 1000,
+                                tailPadding: settings.tailPaddingMs / 1000)
                         } label: {
                             Label("Пересчитать паузы по настройкам", systemImage: "arrow.triangle.2.circlepath")
                         }

@@ -41,7 +41,7 @@ final class AnalysisLog: Sendable {
             "iOS \(device.operatingSystemVersionString), RAM \(Format.bytes(Int64(device.physicalMemory))), версия \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "?")"
         )
         write(
-            "Настройки: пауза ≥ \(settings.minPause) с, отступ \(Int(settings.padding * 1000)) мс, Whisper \(settings.whisperModel.title), дубли \(settings.retakeModel.title), Silero \(settings.useSilero)"
+            "Настройки: пауза ≥ \(settings.minPause) с, отступ \(Int(settings.padding * 1000))/\(Int(settings.tailPadding * 1000)) мс, Whisper \(settings.whisperModel.title), дубли \(settings.retakeModel.title), Silero \(settings.useSilero)"
         )
     }
 }
