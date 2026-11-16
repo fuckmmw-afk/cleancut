@@ -13,16 +13,20 @@ public enum SpeechSegmenter {
         /// Тишина короче этого значения внутри речи игнорируется.
         public var joinGap: Double
         public var energyMarginDB: Double
+        /// Тишина по громкости не короче этого значения разрывает интервал Silero.
+        /// Silero отпускает речь с опозданием и сливает соседние фразы через короткую паузу.
+        public var splitGap: Double
 
         public init(
             onThreshold: Float = 0.6, offThreshold: Float = 0.4, minSpeech: Double = 0.1,
-            joinGap: Double = 0.1, energyMarginDB: Double = 10
+            joinGap: Double = 0.1, energyMarginDB: Double = 10, splitGap: Double = 0.3
         ) {
             self.onThreshold = onThreshold
             self.offThreshold = offThreshold
             self.minSpeech = minSpeech
             self.joinGap = joinGap
             self.energyMarginDB = energyMarginDB
+            self.splitGap = splitGap
         }
     }
 
@@ -75,20 +79,51 @@ public enum SpeechSegmenter {
                 start = Double(first) * frameDuration
             }
 
-            // Конец: последний громкий кадр рядом с грубой границей. Порог чуть выше, чтобы выдох
-            // и хвост эха после фразы не считались речью.
+            // Конец: последний громкий кадр до грубой границы плюс окно. Silero держит «речь»
+            // на одно-три окна после последнего слова, поэтому ищем назад до самого начала интервала,
+            // а не только в соседнем окне. Порог чуть выше, чтобы выдох и эхо не считались речью.
             let endThreshold = min(threshold + 4, loud - 6)
-            let endLow = max(frame(end - hop), frame(start))
+            let endLow = frame(start)
             let endHigh = frame(end + hop)
             if endLow < endHigh, let last = (endLow..<endHigh).last(where: { levels[$0] >= endThreshold }) {
                 end = Double(last + 1) * frameDuration
             }
 
-            if end > start {
-                refined.append(TimeRange(start: max(0, start), end: min(end, duration)))
-            }
+            guard end > start else { continue }
+            refined += split(
+                TimeRange(start: max(0, start), end: min(end, duration)), levels: levels,
+                frameDuration: frameDuration, threshold: threshold, minGap: options.splitGap)
         }
 
         return CutPlanner.merge(refined, tolerance: options.joinGap).filter { $0.duration >= options.minSpeech }
+    }
+
+    /// Разрезает интервал по тихим участкам не короче `minGap`.
+    static func split(
+        _ range: TimeRange, levels: [Float], frameDuration: Double, threshold: Float, minGap: Double
+    ) -> [TimeRange] {
+        guard minGap > 0 else { return [range] }
+        let first = max(0, Int((range.start / frameDuration).rounded()))
+        let last = min(levels.count, Int((range.end / frameDuration).rounded()))
+        let minFrames = Int((minGap / frameDuration).rounded(.up))
+        guard last - first > minFrames else { return [range] }
+
+        var result: [TimeRange] = []
+        var cursor = range.start
+        var quietStart: Int?
+        for index in first..<last {
+            if levels[index] < threshold {
+                if quietStart == nil { quietStart = index }
+            } else if let quiet = quietStart {
+                if index - quiet >= minFrames {
+                    let gapStart = Double(quiet) * frameDuration
+                    if gapStart > cursor { result.append(TimeRange(start: cursor, end: gapStart)) }
+                    cursor = Double(index) * frameDuration
+                }
+                quietStart = nil
+            }
+        }
+        if range.end > cursor { result.append(TimeRange(start: cursor, end: range.end)) }
+        return result
     }
 }

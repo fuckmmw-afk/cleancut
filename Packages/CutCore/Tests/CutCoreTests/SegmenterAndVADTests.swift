@@ -109,6 +109,41 @@ final class SpeechSegmenterTests: XCTestCase {
         XCTAssertEqual(ranges[0].end, 0.82, accuracy: 1e-6)
     }
 
+    func testLateSileroEndSnapsToLastLoudFrame() {
+        // Silero держит речь до 1.5 с, а голос по энергии затих на 0.6 с — дальше окна от грубой границы.
+        let probs: [Float] = [0.1, 0.9, 0.9, 0.8, 0.7, 0.6, 0.1, 0.1]
+        var levels = [Float](repeating: -60, count: 100)
+        for index in 15..<30 { levels[index] = -20 }
+        let ranges = SpeechSegmenter.speechRanges(
+            probabilities: probs, hop: 0.25, levels: levels, frameDuration: 0.02, duration: 2)
+        XCTAssertEqual(ranges.count, 1)
+        XCTAssertEqual(ranges[0].start, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(ranges[0].end, 0.6, accuracy: 1e-6)
+    }
+
+    func testQuietGapInsideSileroRangeSplitsSpeech() {
+        // Silero не отпустил речь между фразами, а по громкости там 0.5 с тишины.
+        let probs = [Float](repeating: 0.9, count: 8)
+        var levels = [Float](repeating: -60, count: 100)
+        for index in 0..<40 { levels[index] = -20 }
+        for index in 65..<100 { levels[index] = -20 }
+        let ranges = SpeechSegmenter.speechRanges(
+            probabilities: probs, hop: 0.25, levels: levels, frameDuration: 0.02, duration: 2)
+        XCTAssertEqual(ranges.count, 2)
+        XCTAssertEqual(ranges[0].end, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(ranges[1].start, 1.3, accuracy: 1e-6)
+    }
+
+    func testShortQuietGapDoesNotSplit() {
+        // Смычка согласного и короткий вдох внутри фразы не разрывают речь.
+        let probs = [Float](repeating: 0.9, count: 8)
+        var levels = [Float](repeating: -20, count: 100)
+        for index in 40..<50 { levels[index] = -60 }
+        let ranges = SpeechSegmenter.speechRanges(
+            probabilities: probs, hop: 0.25, levels: levels, frameDuration: 0.02, duration: 2)
+        XCTAssertEqual(ranges.count, 1)
+    }
+
     func testFallsBackToCoarseWithoutLevels() {
         let ranges = SpeechSegmenter.speechRanges(
             probabilities: [0.9, 0.9, 0.1], hop: 0.25, levels: [], frameDuration: 0.02, duration: 0.6)
