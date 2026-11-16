@@ -16,11 +16,15 @@ public enum SpeechSegmenter {
         /// Тишина по громкости не короче этого значения разрывает интервал Silero.
         /// Silero отпускает речь с опозданием и сливает соседние фразы через короткую паузу.
         public var splitGap: Double
+        /// Насколько тише самой фразы может быть её край. Всё, что тише, — фон, дыхание, шорох.
+        /// Нужен там, где фон в паузах громче общего порога: шумная комната, перелистывание страниц.
+        public var localDropDB: Double
 
         public init(
             onThreshold: Float = 0.6, offThreshold: Float = 0.4, minSpeech: Double = 0.1,
-            joinGap: Double = 0.1, energyMarginDB: Double = 10, splitGap: Double = 0.3
+            joinGap: Double = 0.1, energyMarginDB: Double = 10, splitGap: Double = 0.3, localDropDB: Double = 30
         ) {
+            self.localDropDB = localDropDB
             self.onThreshold = onThreshold
             self.offThreshold = offThreshold
             self.minSpeech = minSpeech
@@ -72,17 +76,28 @@ public enum SpeechSegmenter {
             var start = range.start
             var end = min(range.end, duration)
 
+            // Громкость самой фразы: края ищем относительно неё, а не только относительно всего ролика.
+            let localLow = frame(range.start - hop)
+            let localHigh = frame(end + hop)
+            var local = threshold
+            if localLow < localHigh {
+                let sortedLocal = levels[localLow..<localHigh].sorted()
+                let peak = sortedLocal[min(sortedLocal.count - 1, sortedLocal.count * 90 / 100)]
+                local = Float(Double(peak) - options.localDropDB)
+            }
+            let startThreshold = max(threshold, local)
+
             // Начало: первый громкий кадр в пределах одного окна в обе стороны от грубой границы.
-            let startLow = frame(range.start - hop)
+            let startLow = localLow
             let startHigh = min(frame(range.start + hop), frame(end))
-            if startLow < startHigh, let first = (startLow..<startHigh).first(where: { levels[$0] >= threshold }) {
+            if startLow < startHigh, let first = (startLow..<startHigh).first(where: { levels[$0] >= startThreshold }) {
                 start = Double(first) * frameDuration
             }
 
             // Конец: последний громкий кадр до грубой границы плюс окно. Silero держит «речь»
             // на одно-три окна после последнего слова, поэтому ищем назад до самого начала интервала,
             // а не только в соседнем окне. Порог чуть выше, чтобы выдох и эхо не считались речью.
-            let endThreshold = min(threshold + 4, loud - 6)
+            let endThreshold = max(min(threshold + 4, loud - 6), local + 3)
             let endLow = frame(start)
             let endHigh = frame(end + hop)
             if endLow < endHigh, let last = (endLow..<endHigh).last(where: { levels[$0] >= endThreshold }) {
@@ -92,7 +107,7 @@ public enum SpeechSegmenter {
             guard end > start else { continue }
             refined += split(
                 TimeRange(start: max(0, start), end: min(end, duration)), levels: levels,
-                frameDuration: frameDuration, threshold: threshold, minGap: options.splitGap)
+                frameDuration: frameDuration, threshold: startThreshold, minGap: options.splitGap)
         }
 
         return CutPlanner.merge(refined, tolerance: options.joinGap).filter { $0.duration >= options.minSpeech }

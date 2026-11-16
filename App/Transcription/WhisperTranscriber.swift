@@ -40,6 +40,12 @@ enum WhisperTranscriber {
             )
         }
 
+        // Подсказка с оговорками и повторами: без неё Whisper «чистит» речь и пишет повторённое слово один раз.
+        let promptTokens = whisper.tokenizer.map { tokenizer in
+            tokenizer.encode(text: " " + TranscriptCleaner.verbatimPrompt)
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        }
+
         let options = DecodingOptions(
             verbose: false,
             task: .transcribe,
@@ -50,6 +56,7 @@ enum WhisperTranscriber {
             skipSpecialTokens: true,
             withoutTimestamps: false,
             wordTimestamps: true,
+            promptTokens: promptTokens,
             chunkingStrategy: .vad)
 
         // Прогресс WhisperKit ведёт сам, опрашиваем его со стороны.

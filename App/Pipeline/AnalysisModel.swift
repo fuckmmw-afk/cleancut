@@ -107,7 +107,6 @@ final class AnalysisModel {
         if project.stage == .imported || project.words.isEmpty {
             let transcript = try await transcribe(sourceURL: sourceURL, settings: settings, log: log)
             project.words = transcript.words
-            project.phrases = PhraseSegmenter.phrases(from: transcript.words)
             project.speech = transcript.speech
             project.notes = transcript.notes
             project.stage = .transcribed
@@ -118,6 +117,19 @@ final class AnalysisModel {
             skippedSteps = [.audio, .vad, .whisper]
         }
         try Task.checkCancellation()
+
+        // Выдумки Whisper (титры, «Продолжение следует») убираем, речь без слов помечаем «[…]».
+        // На повторном анализе чистим заново: старые проекты могли быть сделаны без этого шага.
+        let cleaned = TranscriptCleaner.clean(
+            project.words.filter { !TranscriptCleaner.isUnknown($0) }, speech: project.speech,
+            duration: project.duration)
+        if !cleaned.removed.isEmpty {
+            log.write("Убраны выдумки Whisper: " + cleaned.removed.map { "«\($0)»" }.joined(separator: ", "))
+        }
+        if cleaned.unknownCount > 0 { log.write("Речь без слов: \(cleaned.unknownCount) кусков") }
+        project.words = cleaned.words
+        project.phrases = PhraseSegmenter.phrases(from: cleaned.words)
+        log.write("Речь: " + project.speech.map(Self.span).joined(separator: " "))
 
         // Паузы.
         project.minPause = settings.minPause
@@ -167,10 +179,15 @@ final class AnalysisModel {
 
         project.cuts = cuts.sorted { $0.start < $1.start }
         project.stage = .analyzed
+        log.write("Резы: " + project.finalCuts.map(Self.span).joined(separator: " "))
         store.save(project)
         log.write(
             "Готово: пауз \(cuts.filter { $0.kind == .pause }.count), повторов \(cuts.filter { $0.kind != .pause && $0.enabled }.count - retakes.removals.count), LLM вырезала \(retakes.removals.count), отклонено \(retakes.rejected.count), итог \(Format.duration(project.outputDuration)) из \(Format.duration(project.duration))"
         )
+    }
+
+    private static func span(_ range: TimeRange) -> String {
+        "\(Format.timecode(range.start))–\(Format.timecode(range.end))"
     }
 
     /// Невидимый префикс, по которому замечания детектора дублей отличаются от остальных.

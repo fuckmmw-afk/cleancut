@@ -73,6 +73,10 @@ final class ReviewModel {
     private(set) var isReady = false
     private(set) var canUndo = false
     private(set) var selection: ClosedRange<Int>?
+    /// Сдвиг границ выделенного куска, секунды. Нужен, когда Whisper записал два одинаковых слова одним
+    /// и рез по слову захватывает не тот кусок звука.
+    var selectionStartShift: Double = 0
+    var selectionEndShift: Double = 0
     var error: AppError?
     var tapMode: TapMode = .cut {
         didSet { if tapMode != .select { clearSelection() } }
@@ -255,6 +259,8 @@ final class ReviewModel {
 
     func tapWord(_ index: Int) {
         guard project.words.indices.contains(index) else { return }
+        selectionStartShift = 0
+        selectionEndShift = 0
         if let anchor = selectionAnchor {
             selection = min(anchor, index)...max(anchor, index)
             selectionAnchor = nil
@@ -267,21 +273,38 @@ final class ReviewModel {
     func clearSelection() {
         selection = nil
         selectionAnchor = nil
+        selectionStartShift = 0
+        selectionEndShift = 0
     }
 
     var selectionText: String {
-        guard let selection else { return "" }
-        let count = selection.count
-        let seconds = project.words[selection.upperBound].end - project.words[selection.lowerBound].start
-        return "\(count) сл. · \(String(format: "%.1f", seconds)) с"
+        guard let range = selectionRange else { return "" }
+        let count = selection?.count ?? 0
+        return "\(count) сл. · \(String(format: "%.2f", range.duration)) с"
     }
 
-    func cutSelection() {
+    /// Кусок исходника, который вырежет «Вырезать», с учётом сдвига границ.
+    var selectionRange: TimeRange? {
         guard let selection,
             let range = CutPlanner.cutRange(
                 forWords: selection.lowerBound..<(selection.upperBound + 1), in: project.words,
                 duration: project.duration, padding: project.padding, tailPadding: project.plannerOptions.tailPadding)
-        else { return }
+        else { return nil }
+        let start = min(max(0, range.start + selectionStartShift), project.duration)
+        let end = min(max(0, range.end + selectionEndShift), project.duration)
+        guard end - start > 0.02 else { return nil }
+        return TimeRange(start: start, end: end)
+    }
+
+    /// Проигрывает выделенный кусок с небольшим заходом, чтобы было слышно, что именно вырежется.
+    func previewSelection() {
+        guard let range = selectionRange else { return }
+        seek(toSource: max(0, range.start - 0.3))
+        play()
+    }
+
+    func cutSelection() {
+        guard let range = selectionRange else { return }
         pushHistory()
         project.cuts.append(Cut(start: range.start, end: range.end, kind: .manual))
         let start = range.start

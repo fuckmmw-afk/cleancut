@@ -150,3 +150,18 @@ final class SpeechSegmenterTests: XCTestCase {
         XCTAssertEqual(ranges, [TimeRange(start: 0, end: 0.5)])
     }
 }
+
+final class NoisyRoomSegmenterTests: XCTestCase {
+    func testEndIgnoresLoudBackgroundAfterSpeech() {
+        // Тихие паузы в начале ролика задают общий порог −50 дБ, а после фразы фон −45 дБ
+        // (шорох, дыхание). Конец должен встать по голосу, а не по фону.
+        let probs: [Float] = [0.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.1, 0.1]
+        var levels = [Float](repeating: -62, count: 100)
+        for index in 15..<40 { levels[index] = -12 }
+        for index in 40..<80 { levels[index] = -45 }
+        let ranges = SpeechSegmenter.speechRanges(
+            probabilities: probs, hop: 0.25, levels: levels, frameDuration: 0.02, duration: 2)
+        XCTAssertEqual(ranges.count, 1)
+        XCTAssertEqual(ranges[0].end, 0.8, accuracy: 1e-6)
+    }
+}

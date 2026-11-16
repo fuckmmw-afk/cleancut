@@ -202,11 +202,31 @@ private struct ReviewContent: View {
     }
 
     private var selectionBar: some View {
+        VStack(spacing: 6) {
+            if model.selection != nil {
+                ShiftStepper(title: "Начало", value: $model.selectionStartShift)
+                ShiftStepper(title: "Конец", value: $model.selectionEndShift)
+            }
+            selectionButtons
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var selectionButtons: some View {
         HStack {
             if model.selection == nil {
                 Text("Тапни первое и последнее слово куска").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
             } else {
+                Button {
+                    model.previewSelection()
+                } label: {
+                    Image(systemName: "play.fill")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Послушать кусок")
                 Text(model.selectionText).font(.footnote).monospacedDigit()
                 Spacer()
                 Button("Сброс") { model.clearSelection() }
@@ -215,11 +235,24 @@ private struct ReviewContent: View {
                     .buttonStyle(.bordered)
                 Button("Вырезать") { model.cutSelection() }
                     .buttonStyle(.borderedProminent)
+                    .disabled(model.selectionRange == nil)
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-        .background(.bar)
+    }
+}
+
+/// Сдвиг границы реза шагом 50 мс.
+private struct ShiftStepper: View {
+    let title: String
+    @Binding var value: Double
+
+    var body: some View {
+        Stepper(value: $value, in: -1.5...1.5, step: 0.05) {
+            Text("\(title): \(value >= 0 ? "+" : "−")\(String(format: "%.2f", abs(value))) с")
+                .font(.footnote)
+                .monospacedDigit()
+                .foregroundStyle(value == 0 ? .secondary : .primary)
+        }
     }
 }
 
@@ -300,10 +333,13 @@ private struct PhraseRow: View {
     private var attributed: AttributedString {
         var result = AttributedString()
         for index in phrase.wordRange where model.project.words.indices.contains(index) {
-            var run = AttributedString(model.project.words[index].text + " ")
+            let word = model.project.words[index]
+            var run = AttributedString(word.text + " ")
             if let kind = kind(at: index) {
                 run.swiftUI.strikethroughStyle = Text.LineStyle.single
                 run.swiftUI.foregroundColor = kind.color
+            } else if TranscriptCleaner.isUnknown(word) {
+                run.swiftUI.foregroundColor = .secondary
             }
             result.append(run)
         }
@@ -316,9 +352,13 @@ private struct PhraseRow: View {
                 if model.project.words.indices.contains(index) {
                     let kind = kind(at: index)
                     let selected = model.selection?.contains(index) ?? false
-                    Text(model.project.words[index].text)
+                    let word = model.project.words[index]
+                    Text(word.text)
                         .strikethrough(kind != nil)
-                        .foregroundStyle(selected ? Color.black : (kind?.color ?? .primary))
+                        .foregroundStyle(
+                            selected
+                                ? Color.black
+                                : (kind?.color ?? (TranscriptCleaner.isUnknown(word) ? .secondary : .primary)))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 3)
                         .background(
