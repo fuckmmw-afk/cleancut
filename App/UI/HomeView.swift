@@ -12,9 +12,11 @@ struct HomeView: View {
 
     @State private var path: [Route] = []
     @State private var showPhotoPicker = false
-    @State private var showFileImporter = false
     @State private var showSettings = false
     @State private var isImporting = false
+    @State private var showDocumentPicker = false
+    /// Доля загрузки из Фото, пока видео докачивается из iCloud.
+    @State private var importProgress: Double?
     @State private var error: AppError?
 
     var body: some View {
@@ -44,10 +46,13 @@ struct HomeView: View {
             PhotoVideoPicker(
                 onStart: {
                     showPhotoPicker = false
+                    importProgress = 0
                     isImporting = true
                 },
+                onProgress: { importProgress = $0 },
                 onFinish: { result in
                     showPhotoPicker = false
+                    importProgress = nil
                     switch result {
                     case .success(let url): startImport(.staged(url))
                     case .failure(let failure):
@@ -60,11 +65,14 @@ struct HomeView: View {
             )
             .ignoresSafeArea()
         }
-        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.movie, .video]) { result in
-            switch result {
-            case .success(let url): startImport(.external(url))
-            case .failure(let failure): error = AppError.wrap(failure, title: "Файл не открылся")
+        .sheet(isPresented: $showDocumentPicker) {
+            // Копию из iCloud Drive система делает сама и показывает её прогресс,
+            // поэтому файл приходит уже скачанным и без ограничений доступа.
+            DocumentVideoPicker { url in
+                showDocumentPicker = false
+                if let url { startImport(.staged(url)) }
             }
+            .ignoresSafeArea()
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -74,9 +82,16 @@ struct HomeView: View {
                 ZStack {
                     Color.black.opacity(0.6).ignoresSafeArea()
                     VStack(spacing: 14) {
-                        ProgressView().controlSize(.large)
-                        Text("Копирую видео…").font(.headline)
-                        Text("Большие файлы копируются до минуты").font(.footnote).foregroundStyle(.secondary)
+                        if let importProgress, importProgress > 0.01, importProgress < 0.999 {
+                            ProgressView(value: importProgress).frame(width: 180)
+                            Text("Загружаю видео… \(Int(importProgress * 100))%").font(.headline).monospacedDigit()
+                            Text("Видео в iCloud сначала скачивается на телефон").font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView().controlSize(.large)
+                            Text("Копирую видео…").font(.headline)
+                            Text("Большие файлы копируются до минуты").font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
                     .padding(28)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -97,7 +112,7 @@ struct HomeView: View {
                         Label("Из Фото", systemImage: "photo.on.rectangle")
                     }
                     Button {
-                        showFileImporter = true
+                        showDocumentPicker = true
                     } label: {
                         Label("Из Файлов", systemImage: "folder")
                     }
