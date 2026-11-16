@@ -73,14 +73,3 @@ final class TranscriptCleanerTests: XCTestCase {
         XCTAssertEqual(matches.map(\.words), [0..<3])
     }
 }
-
-final class VerbatimPromptTests: XCTestCase {
-    func testPromptEchoIsRemoved() {
-        let text = TranscriptCleaner.verbatimPrompt.split(separator: " ").map(String.init)
-        let input = text.enumerated().map { index, part in
-            Word(text: part, start: 20 + Double(index) * 0.3, end: 20 + Double(index) * 0.3 + 0.25)
-        }
-        let result = TranscriptCleaner.clean(input, speech: [], duration: 60)
-        XCTAssertFalse(result.words.contains { $0.text.hasPrefix("хотела") })
-    }
-}
